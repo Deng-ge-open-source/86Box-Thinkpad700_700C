@@ -6,6 +6,20 @@
 ThinkPad 700 机型、固件可见的硬件行为、IBM 486SLC、MCA ESDI 启动链、单色 LCD
 显示，以及运行 IBM 参考盘和同时代操作系统所需的输入与显示修复。
 
+![在真正的 ThinkPad 700 中运行的 86Box ThinkPad 700 模拟环境](docs/images/thinkpad700-modernized-real-machine.jpg)
+
+这就是本项目的实体 ThinkPad 700：外表保留经典原机外壳，内部换上现代
+硬件，再由 86Box 重现它曾经的硬件与固件行为。它能像真实的 700 一样完成
+POST、进入并操作 IBM 参考盘、执行自动配置、从 MCA ESDI 硬盘启动，并在真正的
+ThinkPad 700 机身中运行同时代软件。它既保留了老机器的外观与操作体验，又让
+内在拥有了现代、易于维护的第二次生命。
+
+![在复刻机上运行的 IBM ThinkPad 700 PS/2 原版参考盘 1.20](docs/images/thinkpad700-original-reference-diskette.jpg)
+
+这是 IBM ThinkPad 700 PS/2 原版参考盘 1.20 的启动画面，在这台复刻机上呈现出它
+在真实 700 上运行时的样子。这套原厂配置与诊断环境会实际调用本项目希望保存的
+各条固件路径。
+
 ![ThinkPad 700 参考盘](docs/images/thinkpad700-final-reference-disk.png)
 
 > [!IMPORTANT]

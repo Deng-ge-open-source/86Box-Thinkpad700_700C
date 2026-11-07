@@ -7,6 +7,24 @@ fork adds the machine, firmware-facing hardware behavior, IBM 486SLC support,
 MCA ESDI boot path, monochrome LCD presentation, and the input/display fixes
 needed to run the IBM Reference Diskette and a period operating system.
 
+![86Box ThinkPad 700 emulation running inside a real ThinkPad 700](docs/images/thinkpad700-modernized-real-machine.jpg)
+
+This is the project's physical ThinkPad 700: the original vintage enclosure
+on the outside, modern hardware on the inside, and 86Box recreating the machine
+it once was. The emulation reproduces the real 700's firmware-visible behavior
+closely enough to complete POST, enter and use the IBM Reference Diskette,
+perform automatic configuration, boot from its MCA ESDI hard disk, and run
+period software in the genuine ThinkPad 700 shell. It brings the classic
+machine's appearance and operation back to life while giving its internals a
+modern, maintainable second life.
+
+![Original IBM ThinkPad 700 PS/2 Reference Diskette 1.20 running on the recreated machine](docs/images/thinkpad700-original-reference-diskette.jpg)
+
+This is the startup screen of the original IBM ThinkPad 700 PS/2 Reference
+Diskette, version 1.20, presented on the recreated machine just as it appears
+on a real 700. This factory configuration and diagnostic environment exercises
+the firmware paths that the project set out to preserve.
+
 ![ThinkPad 700 Reference Diskette](docs/images/thinkpad700-final-reference-disk.png)
 
 > [!IMPORTANT]
