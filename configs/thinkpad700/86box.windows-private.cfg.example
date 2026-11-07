@@ -1,0 +1,38 @@
+[General]
+confirm_exit = 0
+confirm_reset = 0
+force_43 = 1
+host_cpu = Unknown
+start_in_fullscreen = 1
+video_filter_method = 0
+video_grayscale = 4
+
+[Machine]
+cpu_family = ibm486slc
+cpu_multi = 1
+cpu_speed = 25000000
+cpu_use_dynarec = 1
+machine = ibmtp700
+mem_size = 16384
+
+[Video]
+gfxcard = internal
+
+[Input devices]
+keyboard_type = keyboard_at
+mouse_type = ps2
+
+[Storage controllers]
+hdc_1 = esdi_integrated_mca
+
+[Hard disks]
+hdd_01_esdi_channel = 0
+hdd_01_fn = ../media/ThinkPad700-system.img
+hdd_01_parameters = 32, 64, 370, 0, esdi
+hdd_01_speed = 1997_5400rpm
+
+[Floppy and CD-ROM drives]
+fdd_01_fn = ../media/ThinkPad700-reference-1.20.ima
+fdd_01_turbo = 1
+fdd_01_type = 35_2hd
+fdd_02_type = none

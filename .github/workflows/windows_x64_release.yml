@@ -1,0 +1,71 @@
+name: Windows x64 Release
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/windows_x64_release.yml
+
+permissions:
+  contents: read
+
+jobs:
+  windows-x64-release:
+    name: Windows x64 Release (UCRT64)
+    runs-on: windows-2022
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Prepare MSYS2 UCRT64
+        uses: msys2/setup-msys2@v2
+        with:
+          release: true
+          update: true
+          msystem: UCRT64
+          pacboy: >-
+            ninja:p
+            cmake:p
+            gcc:p
+            pkgconf:p
+            freetype:p
+            SDL2:p
+            zlib:p
+            libpng:p
+            openal:p
+            rtmidi:p
+            libslirp:p
+            fluidsynth:p
+            libserialport:p
+            qt5-static:p
+            qt5-translations:p
+            vulkan-headers:p
+            llvm-openmp:p
+
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure release
+        run: >-
+          cmake -S . -B build/windows-release --preset regular
+          --toolchain ./cmake/flags-gcc-x86_64.cmake
+          -D NEW_DYNAREC=OFF
+          -D QT=ON
+
+      - name: Build
+        run: cmake --build build/windows-release
+
+      - name: Install portable files
+        run: cmake --install build/windows-release
+
+      - name: Upload portable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: 86Box-ThinkPad700-Windows-x64-Release
+          path: build/artifacts/**
+          if-no-files-found: error
+          retention-days: 14

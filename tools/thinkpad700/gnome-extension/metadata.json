@@ -1,0 +1,7 @@
+{
+  "uuid": "thinkpad700c-display-modes@codex.local",
+  "name": "ThinkPad 700C Display Modes",
+  "description": "Color-correct monochrome and inverted high-contrast display modes.",
+  "shell-version": ["42"],
+  "version": 2
+}
