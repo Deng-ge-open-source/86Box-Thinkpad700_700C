@@ -81,6 +81,7 @@ int fdc_current[FDC_MAX] = { FDC_INTERNAL, 0 };
 
 volatile int fdcinited = 0;
 
+#define ENABLE_FDC_LOG 0
 #ifdef ENABLE_FDC_LOG
 int fdc_do_log = ENABLE_FDC_LOG;
 
@@ -663,6 +664,10 @@ fdc_rate(fdc_t *fdc, int drive)
 int
 real_drive(fdc_t *fdc, int drive)
 {
+    /* The ThinkPad 700 planar wires its single internal drive to unit 3. */
+    if (!strcmp(machine_get_internal_name(), "ibmtp700") && (drive == 3))
+        return 0;
+
     if (drive < 2)
         return drive ^ fdc->swap;
     else
@@ -1108,7 +1113,7 @@ fdc_write(uint16_t addr, uint8_t val, void *priv)
                             fdc->mfm = (fdc->command & 0x40) ? 1 : 0;
                             break;
                         case 0x17: /*Powerdown mode*/
-                            if (!(fdc->flags & FDC_FLAG_ALI)) {
+                            if (!(fdc->flags & (FDC_FLAG_ALI | FDC_FLAG_POWERDOWN))) {
                                 fdc_bad_command(fdc);
                                 break;
                             }
@@ -1291,6 +1296,19 @@ fdc_write(uint16_t addr, uint8_t val, void *priv)
                             case 0x06: /* Read data */
                             case 0x0c: /* Read deleted data */
                                 fdc_io_command_phase1(fdc, 0);
+                                if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+                                    (fdc->params[1] == 2) &&
+                                    (fdc->params[2] == 1) &&
+                                    (fdc->params[3] == 9))
+                                    pclog("TP700 LAST IBMBIO FDC START: command=%02X "
+                                          "dma_ch=%d dma_ac=%08X cc=%d cb=%04X "
+                                          "mode=%02X mask=%02X ps2=%02X\n",
+                                          fdc->command, fdc->dma_ch,
+                                          dma[fdc->dma_ch].ac,
+                                          dma[fdc->dma_ch].cc,
+                                          dma[fdc->dma_ch].cb,
+                                          dma[fdc->dma_ch].mode, dma_m,
+                                          dma[fdc->dma_ch].ps2_mode);
                                 fdc_log("Reading sector (drive %i) (%i) (%i %i %i %i) (%i %i %i)\n", fdc->drive, fdc->params[0], fdc->params[1], fdc->params[2], fdc->params[3], fdc->params[4], fdc->params[5], fdc->params[6], fdc->params[7]);
                                 if ((fdc->head & 0x01) && !fdd_is_double_sided(real_drive(fdc, fdc->drive))) {
                                     fdc_noidam(fdc);
@@ -1315,7 +1333,17 @@ fdc_write(uint16_t addr, uint8_t val, void *priv)
                                 fdc->st0 |= 0x80;
                                 drive_num = real_drive(fdc, fdc->drive);
                                 /* Three conditions under which the command should fail. */
-                                if ((drive_num >= FDD_NUM) || !fdd_get_flags(drive_num) || !motoron[drive_num] || fdd_track0(drive_num)) {
+                                /*
+                                 * The 9552 firmware deliberately recalibrates an already
+                                 * track-zero drive after probing its media.  Real hardware
+                                 * completes that command after stepping against the track-zero
+                                 * stop; treating an asserted TRK0 input as an immediate failure
+                                 * races the firmware's INT 15h wait registration.
+                                 */
+                                if ((drive_num >= FDD_NUM) || !fdd_get_flags(drive_num) ||
+                                    !motoron[drive_num] ||
+                                    (fdd_track0(drive_num) &&
+                                     strcmp(machine_get_internal_name(), "ibmtp700"))) {
                                     fdc_log("Failed recalibrate\n");
                                     if ((drive_num >= FDD_NUM) || !fdd_get_flags(drive_num) || !motoron[drive_num])
                                         fdc->st0 = 0x70 | (fdc->params[0] & 3);
@@ -1769,6 +1797,13 @@ fdc_callback(void *priv)
     int    compare    = 0;
     int    drive_num  = 0;
     int    old_sector = 0;
+    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+        (fdc->rw_track == 2) && (fdc->head == 1) &&
+        (fdc->sector == 9))
+        pclog("TP700 LAST IBMBIO FDC CALLBACK: interrupt=%d tc=%d "
+              "stat=%02X fintr=%d dma_ac=%08X cc=%d mask=%02X\n",
+              fdc->interrupt, fdc->tc, fdc->stat, fdc->fintr,
+              dma[fdc->dma_ch].ac, dma[fdc->dma_ch].cc, dma_m);
     fdc_log("fdc_callback(): %i\n", fdc->interrupt);
     switch (fdc->interrupt) {
         case -3: /*End of command with interrupt*/
@@ -2250,6 +2285,13 @@ fdc_sector_finishcompare(fdc_t *fdc, int satisfying)
 void
 fdc_sector_finishread(fdc_t *fdc)
 {
+    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+        (fdc->rw_track == 2) && (fdc->head == 1) &&
+        (fdc->sector == 9))
+        pclog("TP700 LAST IBMBIO FINISHREAD: tc=%d stat=%02X "
+              "dma_ac=%08X cc=%d mask=%02X\n",
+              fdc->tc, fdc->stat, dma[fdc->dma_ch].ac,
+              dma[fdc->dma_ch].cc, dma_m);
     fdc->stat   = 0x10;
     fdc_callback(fdc);
 }
@@ -3022,6 +3064,27 @@ const device_t fdc_ps2_mca_device = {
     .flags         = 0,
     .local         = FDC_FLAG_FINTR | FDC_FLAG_DENSEL_INVERT | FDC_FLAG_NO_DSR_RESET | FDC_FLAG_AT |
                      FDC_FLAG_PS2_MCA,
+    .init          = fdc_init,
+    .close         = fdc_close,
+    .reset         = fdc_reset,
+    .available     = NULL,
+    .speed_changed = NULL,
+    .force_redraw  = NULL,
+    .config        = NULL
+};
+
+/*
+ * The portable PS/2 controller used by the ThinkPad 700 implements command
+ * 17h (power-down mode).  Keep this separate from the desktop PS/2 MCA FDC:
+ * the 9552 reference disk probes the command and treats an invalid-command
+ * response as system-management failure 00191.
+ */
+const device_t fdc_ps2_mca_powerdown_device = {
+    .name          = "PS/2 MCA portable FDC",
+    .internal_name = "fdc_ps2_mca_powerdown",
+    .flags         = 0,
+    .local         = FDC_FLAG_FINTR | FDC_FLAG_DENSEL_INVERT | FDC_FLAG_NO_DSR_RESET | FDC_FLAG_AT |
+                     FDC_FLAG_PS2_MCA | FDC_FLAG_POWERDOWN,
     .init          = fdc_init,
     .close         = fdc_close,
     .reset         = fdc_reset,

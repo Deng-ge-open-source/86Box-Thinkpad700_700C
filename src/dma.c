@@ -791,6 +791,12 @@ dma_ps2_write(uint16_t addr, uint8_t val, UNUSED(void *priv))
                         dma_ps2_run(dma_ps2.xfr_channel);
                     break;
 
+                case 0xf:
+                    /* Reserved on the generic PS/2 DMA interface.  The 9552
+                     * firmware writes zero through it while quiescing the
+                     * controller; real hardware ignores the write. */
+                    break;
+
                 default:
                     fatal("Bad XFR command %i channel %i val %02x\n", dma_ps2.xfr_command, dma_ps2.xfr_channel, val);
             }

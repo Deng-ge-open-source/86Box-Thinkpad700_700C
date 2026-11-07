@@ -6,10 +6,17 @@
 #include <limits.h>
 #include <unistd.h>
 
+#include <SDL.h>
+
 #include <86box/86box.h>
 #include <86box/plat.h>
 #include <86box/plat_dynld.h>
 #include <86box/cdrom.h>
+#include <86box/hdc.h>
+#include <86box/hdd.h>
+#include <86box/keyboard.h>
+#include <86box/mca.h>
+#include <86box/mem.h>
 #include <86box/version.h>
 #include <86box/video.h>
 
@@ -162,6 +169,11 @@ monitor_execute_line(char *line)
                 "hardreset - hard reset the emulated system.\n"
                 "pause - pause the the emulated system.\n"
                 "fastfwd - toggle fast forward.\n"
+                "sendkey <hex scan> [hex scan ...] - send Set-1 key presses without focusing the window.\n"
+                "mousecapture <0|1> - release or capture the host mouse.\n"
+                "tp700ctrlend - inject the host Ctrl+End release shortcut.\n"
+                "tp700state - show ThinkPad storage and MCA state.\n"
+                "tp700hdd - expose the configured hard disk to the ThinkPad BIOS.\n"
                 "screenshot - save a screenshot.\n"
                 "fullscreen - toggle fullscreen.\n"
                 "version - print version and license information.\n"
@@ -214,6 +226,92 @@ monitor_execute_line(char *line)
         } else if (strncasecmp(xargv[0], "fastfwd", 7) == 0) {
             fast_forward ^= 1;
             printf("%s", fast_forward ? "Fast forward on.\n" : "Fast forward off.\n");
+        } else if (strncasecmp(xargv[0], "sendkey", 7) == 0 && cmdargc >= 2) {
+            uint16_t scans[32];
+            int      count = cmdargc - 1;
+
+            if (count > 32)
+                count = 32;
+            for (int i = 0; i < count; i++) {
+                scans[i] = (uint16_t) strtoul(xargv[i + 1], NULL, 16);
+                keyboard_input(1, scans[i]);
+            }
+            usleep(50000);
+            for (int i = count - 1; i >= 0; i--)
+                keyboard_input(0, scans[i]);
+        } else if (strncasecmp(xargv[0], "mousecapture", 12) == 0 && cmdargc >= 2) {
+            const int capture = !!atoi(xargv[1]);
+
+            plat_mouse_capture(capture);
+            printf("Mouse capture %s.\n", capture ? "on" : "off");
+        } else if (strncasecmp(xargv[0], "tp700ctrlend", 12) == 0) {
+            SDL_Event event;
+
+            memset(&event, 0, sizeof(event));
+            event.type                = SDL_KEYDOWN;
+            event.key.state           = SDL_PRESSED;
+            event.key.keysym.scancode = SDL_SCANCODE_LCTRL;
+            event.key.keysym.sym      = SDLK_LCTRL;
+            event.key.keysym.mod      = KMOD_CTRL;
+            SDL_PushEvent(&event);
+
+            event.key.keysym.scancode = SDL_SCANCODE_END;
+            event.key.keysym.sym      = SDLK_END;
+            SDL_PushEvent(&event);
+
+            event.type      = SDL_KEYUP;
+            event.key.state = SDL_RELEASED;
+            SDL_PushEvent(&event);
+
+            event.key.keysym.scancode = SDL_SCANCODE_LCTRL;
+            event.key.keysym.sym      = SDLK_LCTRL;
+            event.key.keysym.mod      = KMOD_NONE;
+            SDL_PushEvent(&event);
+            printf("Injected host Ctrl+End.\n");
+        } else if (strncasecmp(xargv[0], "tp700bioskey", 12) == 0 && cmdargc >= 2) {
+            /*
+             * Diagnostic injection into the IBM-compatible BIOS keyboard
+             * ring buffer.  This lets the Reference Diskette be exercised
+             * while the ThinkPad controller's extended-key translation is
+             * being repaired.  The argument is the standard INT 16h word:
+             * scan code in the high byte, ASCII in the low byte.
+             */
+            uint16_t key_word = (uint16_t) strtoul(xargv[1], NULL, 16);
+            uint16_t head     = ram[0x41a] | (ram[0x41b] << 8);
+            uint16_t tail     = ram[0x41c] | (ram[0x41d] << 8);
+            uint16_t next;
+
+            if ((tail < 0x001e) || (tail >= 0x003e) || (tail & 1))
+                tail = 0x001e;
+            next = tail + 2;
+            if (next >= 0x003e)
+                next = 0x001e;
+            if (next != head) {
+                ram[0x400 + tail]     = key_word & 0xff;
+                ram[0x400 + tail + 1] = key_word >> 8;
+                ram[0x41c]            = next & 0xff;
+                ram[0x41d]            = next >> 8;
+                printf("Injected BIOS key %04X at %04X (head=%04X next=%04X).\n",
+                       key_word, tail, head, next);
+            } else {
+                printf("BIOS keyboard buffer full; key %04X not injected.\n", key_word);
+            }
+        } else if (strncasecmp(xargv[0], "tp700state", 10) == 0) {
+            printf("HDC: %d %d %d %d; HDD0: bus=%u channel=%u CHS=%u/%u/%u file=%s\n",
+                   hdc_current[0], hdc_current[1], hdc_current[2], hdc_current[3],
+                   hdd[0].bus_type, hdd[0].esdi_channel,
+                   hdd[0].tracks, hdd[0].hpc, hdd[0].spt, hdd[0].fn);
+            for (uint8_t slot = 0; slot < mca_get_nr_cards(); slot++)
+                printf("MCA%u: id=%02X%02X pos2=%02X pos3=%02X pos4=%02X enabled=%u\n",
+                       slot + 1, mca_read_index(0x101, slot), mca_read_index(0x100, slot),
+                       mca_read_index(0x102, slot), mca_read_index(0x103, slot),
+                       mca_read_index(0x104, slot), mca_read_index(0x102, slot) & 1);
+            printf("BDA: hard disks=%u warm=%04X INT13=%04X:%04X\n", ram[0x475],
+                   ram[0x472] | (ram[0x473] << 8),
+                   ram[0x4e] | (ram[0x4f] << 8), ram[0x4c] | (ram[0x4d] << 8));
+        } else if (strncasecmp(xargv[0], "tp700hdd", 8) == 0) {
+            ram[0x475] = hdd_is_valid(0) ? 1 : 0;
+            printf("ThinkPad BIOS hard-disk count set to %u.\n", ram[0x475]);
         } else if (strncasecmp(xargv[0], "hardreset", 9) == 0) {
             pc_reset_hard();
         } else if (strncasecmp(xargv[0], "cdload", 6) == 0 && cmdargc >= 3) {

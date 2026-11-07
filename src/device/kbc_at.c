@@ -65,6 +65,14 @@
 #define FLAG_CACHE         0x02
 #define FLAG_PS2           0x04
 
+/*
+ * Polls (100 us) before the first auxiliary byte can arrive after the
+ * interface is enabled.  A physical PS/2 device must see its clock released
+ * and clock an 11-bit frame at 10-16.7 kHz, so a pending response cannot
+ * appear in the controller output buffer in the same instant as the enable.
+ */
+#define AUX_ENABLE_DELAY   10
+
 enum {
     STATE_RESET = 0,       /* KBC reset state, only accepts command AA. */
     STATE_KBC_DELAY_OUT,   /* KBC is sending one single byte. */
@@ -104,6 +112,7 @@ typedef struct atkbc_t {
     uint8_t pending;
     uint8_t irq_state;
     uint8_t do_irq;
+    uint8_t aux_delay;
     uint8_t is_asic;
     uint8_t is_green;
     uint8_t kblock_switch;
@@ -131,6 +140,7 @@ typedef struct atkbc_t {
     /* Main timers. */
     pc_timer_t kbc_poll_timer;
     pc_timer_t kbc_dev_poll_timer;
+    pc_timer_t kbc_irq_timer;
 
     /* P2 pulse callback timer. */
     pc_timer_t pulse_cb;
@@ -338,8 +348,10 @@ kbc_set_do_irq(atkbc_t *dev, uint8_t channel)
 }
 
 static void
-kbc_do_irq(atkbc_t *dev)
+kbc_at_irq(void *priv)
 {
+    atkbc_t *dev = (atkbc_t *) priv;
+
     if (dev->do_irq) {
         /* WARNING: On PS/2, all IRQ's are level-triggered, but the IBM PS/2 KBC firmware is explicitly
                     written to pulse its P2 IRQ bits, so they should be kept as as edge-triggered here. */
@@ -359,6 +371,21 @@ kbc_do_irq(atkbc_t *dev)
 
         dev->do_irq = 0;
     }
+}
+
+static void
+kbc_do_irq(atkbc_t *dev)
+{
+    /*
+     * Discrete 8042 controllers pulse the PIC only after their output-buffer
+     * transition has propagated.  This small hardware delay is significant:
+     * firmware may poll and consume a command response before the IRQ edge.
+     * Integrated ASIC controllers retain their existing immediate behavior.
+     */
+    if (dev->is_asic)
+        kbc_at_irq(dev);
+    else
+        timer_set_delay_u64(&dev->kbc_irq_timer, 3ULL * TIMER_USEC);
 }
 
 static void
@@ -453,6 +480,23 @@ kbc_ibf_process(atkbc_t *dev)
         } else
             kbc_delay_to_ob(dev, 0xfe, 1, 0x40);
     }
+}
+
+static void
+kbc_param_take(atkbc_t *dev)
+{
+    /*
+     * Commit the byte already waiting in IBF before accepting a following
+     * host write.  Some real BIOS routines observe IBF after the command but
+     * issue the next controller command immediately after its parameter; an
+     * 8042 has consumed that parameter by then even if our 100 us poll has
+     * not run yet.
+     */
+    if (dev->status & STAT_CD)
+        dev->state = STATE_MAIN_IBF;
+
+    dev->status &= ~STAT_IFULL;
+    kbc_at_process_cmd(dev);
 }
 
 static void
@@ -597,6 +641,9 @@ kbc_scan_kbd_ps2(atkbc_t *dev)
 static int
 kbc_scan_aux_ps2(atkbc_t *dev)
 {
+    if (dev->aux_delay > 0)
+        return 0;
+
     if ((dev->ports[1] != NULL) && (dev->ports[1]->out_new != -1)) {
         kbc_at_log("ATkbc: %02X coming from channel 2\n", dev->ports[1]->out_new & 0xff);
         kbc_send_to_ob(dev, dev->ports[1]->out_new, 2, 0x00);
@@ -611,7 +658,10 @@ kbc_scan_aux_ps2(atkbc_t *dev)
 static void
 kbc_at_poll_ps2(atkbc_t *dev)
 {
-    kbc_do_irq(dev);
+    if (dev->mem[0x20] & 0x20)
+        dev->aux_delay = AUX_ENABLE_DELAY;
+    else if (dev->aux_delay > 0)
+        dev->aux_delay--;
 
     switch (dev->state) {
         case STATE_RESET:
@@ -2633,6 +2683,10 @@ kbc_at_port_1_write(uint16_t port, uint8_t val, void *priv)
 
     kbc_at_log("ATkbc: [%04X:%08X] write(%04X) = %02X\n", CS, cpu_state.pc, port, val);
 
+    if ((dev->status & STAT_IFULL) && dev->wantdata &&
+        (dev->state == STATE_KBC_PARAM))
+        kbc_param_take(dev);
+
     dev->status &= ~STAT_CD;
 
     if (fast_a20 && dev->wantdata && (dev->command == 0xd1)) {
@@ -2664,6 +2718,10 @@ kbc_at_port_2_write(uint16_t port, uint8_t val, void *priv)
     uint8_t fast_a20 = (kbc_ven != KBC_VEN_SIEMENS);
 
     kbc_at_log("ATkbc: [%04X:%08X] write(%04X) = %02X\n", CS, cpu_state.pc, port, val);
+
+    if ((dev->status & STAT_IFULL) && dev->wantdata &&
+        (dev->state == STATE_KBC_PARAM))
+        kbc_param_take(dev);
 
     dev->status |= STAT_CD;
 
@@ -2733,6 +2791,9 @@ kbc_at_port_1_read(uint16_t port, void *priv)
 
     ret = dev->ob;
     dev->status &= ~STAT_OFULL;
+    /* A polling read can consume the byte before its delayed IRQ fires. */
+    dev->do_irq = 0;
+    timer_disable(&dev->kbc_irq_timer);
     /*
        TODO: IRQ is only tied to OBF on the AT KBC, on the PS/2 KBC, it is controlled by a P2 bit.
        This also means that in AT mode, the IRQ is level-triggered.
@@ -2768,6 +2829,8 @@ kbc_at_reset(void *priv)
 {
     atkbc_t *dev = (atkbc_t *) priv;
 
+    timer_disable(&dev->kbc_irq_timer);
+    dev->do_irq        = 0;
     dev->status        = STAT_UNLOCKED;
     dev->mem[0x20]     = 0x01;
     dev->mem[0x20]    |= CCB_TRANSLATE;
@@ -2780,6 +2843,7 @@ kbc_at_reset(void *priv)
     /* Disabled both the keyboard and auxiliary ports. */
     set_enable_kbd(dev, 0);
     set_enable_aux(dev, 0);
+    dev->aux_delay = AUX_ENABLE_DELAY;
 
     kbc_at_queue_reset(dev);
 
@@ -2828,6 +2892,7 @@ kbc_at_close(void *priv)
     /* Stop timers. */
     timer_disable(&dev->kbc_dev_poll_timer);
     timer_disable(&dev->kbc_poll_timer);
+    timer_disable(&dev->kbc_irq_timer);
 
     for (int i = 0; i < max_ports; i++) {
         if (kbc_at_ports[i] != NULL) {
@@ -2909,6 +2974,7 @@ kbc_at_init(const device_t *info)
     timer_add(&dev->pulse_cb, pulse_poll, dev, 0);
 
     timer_add(&dev->kbc_dev_poll_timer, kbc_at_dev_poll, dev, 1);
+    timer_add(&dev->kbc_irq_timer, kbc_at_irq, dev, 0);
 
     dev->write_cmd_data_ven = NULL;
     dev->write_cmd_ven      = NULL;

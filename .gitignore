@@ -67,3 +67,10 @@ CMakeLists.txt.user
 
 # Jetbrains CLion
 .idea
+
+# OpenTP700 local runtime and non-redistributable material
+/local-assets/
+
+# Python helper caches
+__pycache__/
+*.py[cod]

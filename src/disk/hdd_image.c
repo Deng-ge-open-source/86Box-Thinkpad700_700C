@@ -33,6 +33,7 @@
 #endif
 #define HAVE_STDARG_H
 #include <86box/86box.h>
+#include <86box/machine.h>
 #include <86box/path.h>
 #include <86box/plat.h>
 #include <86box/random.h>
@@ -524,9 +525,19 @@ fail_raw:
                 pclog("hdd_image_load(): VHD: Parent/child timestamp mismatch for VHD file '%s'\n", fn);
             }
 
-            hdd[id].tracks        = hdd_images[id].vhd->footer.geom.cyl;
-            hdd[id].hpc           = hdd_images[id].vhd->footer.geom.heads;
-            hdd[id].spt           = hdd_images[id].vhd->footer.geom.spt;
+            /*
+             * Preserve the explicitly configured translated geometry on the
+             * ThinkPad 700.  The supplied 720CC image's VHD footer contains
+             * a generic 702/16/63 wrapper, while its IBM partition table and
+             * ESDI boot code correctly describe the original 345/64/32 disk.
+             */
+            if (strcmp(machine_get_internal_name(), "ibmtp700") ||
+                (hdd[id].bus_type != HDD_BUS_ESDI) || !hdd[id].tracks ||
+                !hdd[id].hpc || !hdd[id].spt) {
+                hdd[id].tracks = hdd_images[id].vhd->footer.geom.cyl;
+                hdd[id].hpc    = hdd_images[id].vhd->footer.geom.heads;
+                hdd[id].spt    = hdd_images[id].vhd->footer.geom.spt;
+            }
             hdd[id].vhd_blocksize = (hdd_images[id].vhd->footer.disk_type == MVHD_TYPE_FIXED) ? 0 : (hdd_images[id].vhd->sparse.block_sz / MVHD_SECTOR_SIZE);
             if (hdd_images[id].vhd->parent && hdd_images[id].vhd->parent->filename[0])
                 strncpy(hdd[id].vhd_parent, hdd_images[id].vhd->parent->filename, sizeof(hdd[id].vhd_parent) - 1);

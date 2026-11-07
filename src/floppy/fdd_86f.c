@@ -35,6 +35,7 @@
 #include <86box/fdd.h>
 #include <86box/fdc.h>
 #include <86box/fdd_86f.h>
+#include <86box/machine.h>
 #ifdef D86F_COMPRESS
 #    include <lzf.h>
 #endif
@@ -2170,6 +2171,22 @@ d86f_sector_flags(int drive, int side, uint8_t c, uint8_t h, uint8_t r, uint8_t 
 void
 d86f_turbo_read(int drive, int side)
 {
+    static const uint8_t tp700_planar_iml_signature[] = {
+        0x35, 0x39, 0x47, 0x33, 0x36, 0x35, 0x37, 0x20,
+        0x28, 0x43, 0x29, 0x20, 0x43, 0x4f, 0x50, 0x59,
+        0x52, 0x49, 0x47, 0x48, 0x54, 0x20, 0x49, 0x42,
+        0x4d, 0x20, 0x43, 0x4f, 0x52, 0x50, 0x4f, 0x52
+    };
+    static const uint8_t tp700_boot_iml_signature[] = {
+        0x49, 0x4d, 0x4c, 0x0e, 0x1f, 0x8f, 0x06, 0x00,
+        0x02, 0x8f, 0x06, 0x02, 0x02, 0x8f, 0x06, 0xe5,
+        0x01, 0x8f, 0x06, 0xe7, 0x01, 0x8f, 0x06, 0xa6,
+        0x00, 0x8f, 0x06, 0xa8, 0x00, 0x8b, 0xec, 0x66
+    };
+    static int tp700_planar_match = 0;
+    static int tp700_boot_match = 0;
+    static int tp700_planar_streamed = 0;
+    static int tp700_boot_streamed = 0;
     d86f_t *dev         = d86f[drive];
     uint8_t dat         = 0;
     int     recv_data   = 0;
@@ -2180,6 +2197,50 @@ d86f_turbo_read(int drive, int side)
         dat = d86f_handler[drive].read_data(drive, side, dev->turbo_pos);
     else
         dat = (random_generate() & 0xff);
+
+    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+        (drive == 0) && (dev->req_sector.id.c == 2) &&
+        (dev->req_sector.id.h == 1) && (dev->req_sector.id.r == 9) &&
+        ((dev->turbo_pos == 0) || (dev->turbo_pos == 511)))
+        pclog("TP700 LAST IBMBIO DATA: pos=%u state=%02X byte=%02X "
+              "dma_ac=%08X cc=%d mask=%02X\n",
+              dev->turbo_pos, dev->state, dat, dma[2].ac, dma[2].cc,
+              dma_m);
+
+    if (!strcmp(machine_get_internal_name(), "ibmtp700") && (drive == 0)) {
+        const int planar_sector = (dev->req_sector.id.c == 72) &&
+                                  (dev->req_sector.id.h == 1) &&
+                                  (dev->req_sector.id.r == 12);
+        const int boot_sector = (dev->req_sector.id.c == 79) &&
+                                (dev->req_sector.id.h == 1) &&
+                                (dev->req_sector.id.r == 16);
+
+        if (dev->turbo_pos == 0) {
+            tp700_planar_match = planar_sector;
+            tp700_boot_match = boot_sector;
+        }
+        if (planar_sector &&
+            (dev->turbo_pos < sizeof(tp700_planar_iml_signature)) &&
+            (dat != tp700_planar_iml_signature[dev->turbo_pos]))
+            tp700_planar_match = 0;
+        if (boot_sector &&
+            (dev->turbo_pos < sizeof(tp700_boot_iml_signature)) &&
+            (dat != tp700_boot_iml_signature[dev->turbo_pos]))
+            tp700_boot_match = 0;
+
+        if (!tp700_planar_streamed && tp700_planar_match &&
+            (dev->turbo_pos == sizeof(tp700_planar_iml_signature) - 1)) {
+            tp700_planar_streamed = 1;
+            pclog("TP700 IML STREAM SUCCESS: $0007000.IML sector and "
+                  "32-byte signature reached the FDC DMA path\n");
+        }
+        if (!tp700_boot_streamed && tp700_boot_match &&
+            (dev->turbo_pos == sizeof(tp700_boot_iml_signature) - 1)) {
+            tp700_boot_streamed = 1;
+            pclog("TP700 IML STREAM SUCCESS: $BOOT.IML sector and "
+                  "32-byte signature reached the FDC DMA path\n");
+        }
+    }
 
     if (dev->state == STATE_11_SCAN_DATA) {
         /* Scan/compare command. */
@@ -2456,12 +2517,30 @@ d86f_poll(int drive)
     d86f_t *dev = d86f[drive];
     int     mfm;
     int     side;
+    static uint64_t tp700_d86f_polls[FDD_NUM] = { 0 };
+    static uint8_t  tp700_d86f_state[FDD_NUM] = { 0xff, 0xff, 0xff, 0xff };
 
     side = fdd_get_head(drive);
     if (!fdd_is_double_sided(drive))
         side = 0;
 
     mfm = fdc_is_mfm(d86f_fdc);
+
+    tp700_d86f_polls[drive]++;
+    if (0 && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+        ((dev->state != tp700_d86f_state[drive]) ||
+         ((dev->state != STATE_IDLE) &&
+          ((tp700_d86f_polls[drive] % 10000) == 0)))) {
+        pclog("TP700 D86F POLL: drive=%d count=%llu state=%02X pos=%u "
+              "index=%u index_count=%u raw=%u motor=%02llX\n",
+              drive, (unsigned long long) tp700_d86f_polls[drive],
+              dev->state, dev->track_pos,
+              d86f_handler[drive].index_hole_pos(drive, side),
+              dev->index_count,
+              d86f_handler[drive].get_raw_size(drive, side),
+              (unsigned long long) motoron[drive]);
+        tp700_d86f_state[drive] = dev->state;
+    }
 
     if ((dev->state & 0xF8) == 0xE8) {
         if (!d86f_can_format(drive))
@@ -3340,6 +3419,12 @@ d86f_readaddress(int drive, UNUSED(int side), UNUSED(int rate))
 {
     d86f_t *dev = d86f[drive];
 
+    if (!strcmp(machine_get_internal_name(), "ibmtp700"))
+        pclog("TP700 D86F READADDRESS: drive=%d before=%02X pos=%u "
+              "wrong_densel=%d motor=%02llX\n",
+              drive, dev->state, dev->track_pos, d86f_wrong_densel(drive),
+              (unsigned long long) motoron[drive]);
+
     if (fdd_get_head(drive) && (d86f_get_sides(drive) == 1)) {
         fdc_noidam(d86f_fdc);
         dev->state       = STATE_IDLE;
@@ -3360,6 +3445,10 @@ d86f_readaddress(int drive, UNUSED(int side), UNUSED(int rate))
             dev->track_pos = 0;
     } else
         dev->state = STATE_0A_FIND_ID;
+
+    if (!strcmp(machine_get_internal_name(), "ibmtp700"))
+        pclog("TP700 D86F READADDRESS ARMED: drive=%d state=%02X pos=%u\n",
+              drive, dev->state, dev->track_pos);
 }
 
 void

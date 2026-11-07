@@ -710,6 +710,22 @@ svga_recalctimings(svga_t *svga)
     int              old_monitor_overscan_x = svga->monitor->mon_overscan_x;
     int              old_monitor_overscan_y = svga->monitor->mon_overscan_y;
 
+    /*
+     * The 700's internal VGA/LCD path keeps the 80-column text clock at nine
+     * dots.  PC DOS initially inherits that timing from POST, but Windows 3.x
+     * restores BIOS mode 3 with the generic eight-dot sequencer bit set.  On
+     * a normal VGA monitor either timing is legal; on the fixed 700 panel the
+     * latter made the same 80 columns suddenly become 640 rather than 720
+     * pixels, so the prompt looked wider after leaving Windows.
+     *
+     * Normalize only active text modes.  Graphics modes, including Windows,
+     * retain the guest-programmed clocking value.
+     */
+    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+        tp700_hdd_os_active &&
+        !(svga->gdcreg[6] & 1) && !(svga->attrregs[0x10] & 1))
+        svga->seqregs[1] &= ~1;
+
     if (svga->adv_flags & FLAG_PRECISETIME) {
 #ifdef USE_DYNAREC
         if (cpu_use_dynarec)
@@ -1842,6 +1858,7 @@ svga_write_common(uint32_t addr, uint8_t val, uint8_t linear, void *priv)
             svga_log("WriteCommon Over.\n");
             return;
         }
+
     }
 
     if (!(svga->gdcreg[6] & 1))

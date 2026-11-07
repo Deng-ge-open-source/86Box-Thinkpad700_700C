@@ -644,6 +644,7 @@ extern int cpu_waitstates;
 extern int cpu_flush_pending;
 extern int cpu_old_paging;
 extern int cpu_cache_int_enabled;
+extern int cpu_ibm_slc_cache_tracking;
 extern int cpu_cache_ext_enabled;
 extern int cpu_isa_speed;
 extern int cpu_pci_speed;
@@ -713,6 +714,8 @@ extern void cpu_set_agp_speed(int speed);
 extern void cpu_CPUID(void);
 extern void cpu_RDMSR(void);
 extern void cpu_WRMSR(void);
+extern void cpu_ibm_slc_cache_read(uint32_t addr);
+extern void cpu_ibm_slc_cache_invalidate(void);
 
 extern int  checkio(uint32_t port, int mask);
 extern void codegen_block_end(void);
@@ -734,10 +737,19 @@ extern void refreshread(void);
 extern void refreshread_vx0(void);
 extern void resetreadlookup(void);
 extern void softresetx86(void);
+extern int  tp700_boot_hdd(void);
+extern int  tp700_boot_hdd_post(void);
+extern int  tp700_hdd_boot_pending;
+extern int  tp700_hdd_os_active;
 extern void hardresetx86(void);
 extern void x86_int(int num);
 extern void x86_int_sw(int num);
 extern int  x86_int_sw_rm(int num);
+extern void tp700_int21_trace_begin(uint16_t return_cs, uint16_t return_ip, uint8_t ah,
+                                    uint8_t al, const char *path);
+extern void tp700_int21_trace_return(uint16_t return_cs, uint16_t return_ip,
+                                     uint16_t ax, uint16_t flags);
+extern void tp700_int13_reset_state(void);
 
 #ifdef ENABLE_808X_LOG
 extern void dumpregs(int __force);

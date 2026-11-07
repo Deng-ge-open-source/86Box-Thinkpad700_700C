@@ -39,6 +39,12 @@ opINT(uint32_t fetchdat)
     UN_USED(cycles_old);
     uint8_t temp = getbytef();
 
+    if ((temp == 2) && !strcmp(machine_get_internal_name(), "ibmtp700"))
+        pclog("TP700 INT 02 OPCODE: at %04X:%08X oldpc=%08X "
+              "SS:SP=%04X:%04X nmi=%d enable=%d mask=%02X\n",
+              CS, cpu_state.pc - 2, cpu_state.oldpc,
+              SS, ESP & 0xffff, nmi, nmi_enable, nmi_mask);
+
     if ((cr0 & 1) && (cpu_state.eflags & VM_FLAG) && (IOPL != 3)) {
         if (cr4 & CR4_VME) {
             uint16_t t;

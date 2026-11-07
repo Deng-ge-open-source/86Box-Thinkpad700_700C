@@ -61,6 +61,7 @@
 #define FDC_FLAG_SMC661         0x100000 /* SM(s)C FDC37C661 - different TDR enhanced mode */
 #define FDC_FLAG_5550           0x200000 /* IBM Multistation 5550 */
 #define FDC_FLAG_NO_TDR         0x400000 /* Has no tape drive register */
+#define FDC_FLAG_POWERDOWN      0x800000 /* Portable controller command 17h */
 
 typedef struct fdc_t {
     uint8_t dor;
@@ -281,6 +282,7 @@ extern const device_t fdc_at_nsc_pc87310_device;
 extern const device_t fdc_at_nsc_dp8473_device;
 extern const device_t fdc_ps2_device;
 extern const device_t fdc_ps2_mca_device;
+extern const device_t fdc_ps2_mca_powerdown_device;
 #endif
 
 #endif /*EMU_FDC_H*/

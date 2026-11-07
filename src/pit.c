@@ -556,6 +556,15 @@ pit_write(uint16_t addr, uint8_t val, void *priv)
     int    t   = (addr & 3);
     ctr_t *ctr;
 
+    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+        (((addr & 3) == 0) || ((addr & 3) == 3)))
+        pclog("TP700 PIT WRITE: from=%04X:%04X port=%04X val=%02X "
+              "ch0 l=%08X count=%08X mode=%u wm=%u state=%d out=%d\n",
+              CS, (uint16_t) cpu_state.pc, addr, val,
+              dev->counters[0].l, dev->counters[0].count,
+              dev->counters[0].m, dev->counters[0].wm,
+              dev->counters[0].state, dev->counters[0].out);
+
     if ((dev->flags & (PIT_8254 | PIT_EXT_IO))) {
         pit_log("[%04X:%08X] pit_write(%04X, %02X, %016" PRIX64 ")\n",
                 CS, cpu_state.pc, addr, val, (uint64_t) (uintptr_t) priv);
@@ -816,6 +825,30 @@ pit_read(uint16_t addr, void *priv)
 void
 pit_irq0_timer_ps2(int new_out, int old_out, UNUSED(void *priv))
 {
+    static uint64_t tp700_last_irq0_tsc = 0;
+    static unsigned tp700_irq0_edges    = 0;
+
+    if (new_out && !old_out &&
+        !strcmp(machine_get_internal_name(), "ibmtp700") &&
+        (CS == 0x0246) && (cpu_state.pc >= 0x0060) &&
+        (cpu_state.pc <= 0x00a0)) {
+        pit_t *dev = (pit_t *) pit_devs[0].data;
+
+        pclog("TP700 PIT STORM: at=%04X:%04X l=%08X count=%08X "
+              "mode=%u wm=%u state=%d out=%d pit_const=%llu "
+              "tsc=%llu delta=%llu edge=%u\n",
+              CS, (uint16_t) cpu_state.pc,
+              dev->counters[0].l, dev->counters[0].count,
+              dev->counters[0].m, dev->counters[0].wm,
+              dev->counters[0].state, dev->counters[0].out,
+              (unsigned long long) dev->pit_const,
+              (unsigned long long) tsc,
+              (unsigned long long) (tp700_last_irq0_tsc ?
+                                    tsc - tp700_last_irq0_tsc : 0),
+              tp700_irq0_edges++);
+        tp700_last_irq0_tsc = tsc;
+    }
+
     if (new_out && !old_out) {
         picint(1);
         pit_devs[1].set_gate(pit_devs[1].data, 0, 1);
@@ -865,6 +898,19 @@ pit_speaker_timer(int new_out, UNUSED(int old_out), UNUSED(void *priv))
 void
 pit_nmi_timer_ps2(int new_out, UNUSED(int old_out), UNUSED(void *priv))
 {
+    /*
+     * The ThinkPad 700 firmware programs the PS/2 auxiliary timer while
+     * initialising its power-management hardware.  On a desktop Model 50
+     * this output is an NMI source, but carrying that wiring over to the
+     * portable makes the firmware re-enter its NMI handler and stop at
+     * F000:AF5F before IML starts.
+     */
+    if (!strcmp(machine_get_internal_name(), "ibmtp700")) {
+        nmi            = 0;
+        nmi_auto_clear = 0;
+        return;
+    }
+
     nmi = new_out;
 
     if (nmi)

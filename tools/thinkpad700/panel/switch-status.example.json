@@ -1,0 +1,5 @@
+{
+  "connected": true,
+  "host_controls_enabled": false,
+  "inputs": {"mute": 1, "maximum": 0, "invert": 0, "volume": "mute"}
+}

@@ -24,6 +24,9 @@
 #include <86box/fdd.h>
 #include <86box/fdc.h>
 #include <86box/keyboard.h>
+#include <86box/io.h>
+#include <86box/machine.h>
+#include <86box/hdd.h>
 #include <86box/timer.h>
 
 #include "x86seg.h"
@@ -1603,6 +1606,55 @@ void
 x86_int(int num)
 {
     uint32_t addr;
+    static unsigned tp700_irq6_traces = 0;
+    static unsigned tp700_irq2_traces = 0;
+    static unsigned tp700_int1_traces = 0;
+    static unsigned tp700_divide_traces = 0;
+
+    if ((num == 0) && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+        (tp700_divide_traces++ < 64))
+        pclog("TP700 DIVIDE ERROR: from=%04X oldpc=%04X pc=%04X "
+              "AX=%04X BX=%04X DI=%04X DS=%04X operand=%02X "
+              "target=%04X:%04X SS:SP=%04X:%04X\n",
+              CS, (uint16_t) cpu_state.oldpc, (uint16_t) cpu_state.pc,
+              AX, BX, DI, DS, readmemb(ds, (BX + DI + 1) & 0xffff),
+              readmemw(0, 0x0002), readmemw(0, 0x0000), SS, SP);
+
+    if ((num == 1) && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+        (tp700_int1_traces++ < 96))
+        pclog("TP700 INT1: from=%04X oldpc=%04X pc=%04X FLAGS=%04X "
+              "target=%04X:%04X SS:SP=%04X:%04X top=%04X %04X %04X\n",
+              CS, (uint16_t) cpu_state.oldpc, (uint16_t) cpu_state.pc,
+              cpu_state.flags, readmemw(0, 0x0006), readmemw(0, 0x0004),
+              SS, SP, readmemw(ss, SP), readmemw(ss, (SP + 2) & 0xffff),
+              readmemw(ss, (SP + 4) & 0xffff));
+
+    if ((num == 0x0a) && !strcmp(machine_get_internal_name(), "ibmtp700")) {
+        const unsigned trace_index = tp700_irq2_traces++;
+
+        if ((trace_index < 64) || ((trace_index & 0xffff) == 0))
+            pclog("TP700 IRQ2 CASCADE: index=%u from=%04X:%04X "
+                  "master irr/isr/imr=%02X/%02X/%02X "
+                  "slave irr/isr/imr=%02X/%02X/%02X pending=%u/%u\n",
+                  trace_index, CS, (uint16_t) cpu_state.oldpc,
+                  pic.irr, pic.isr, pic.imr,
+                  pic2.irr, pic2.isr, pic2.imr,
+                  pic.int_pending, pic2.int_pending);
+    }
+
+    if ((num == 0x0e) && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+        (tp700_irq6_traces++ < 64))
+        pclog("TP700 IRQ6 ENTRY: from=%04X:%04X SS:SP=%04X:%04X "
+              "FLAGS=%04X vector=%04X:%04X\n",
+              CS, (uint16_t) cpu_state.oldpc, SS, (uint16_t) ESP,
+              cpu_state.flags, readmemw(0, 0x003a), readmemw(0, 0x0038));
+
+    if ((num == 2) && !strcmp(machine_get_internal_name(), "ibmtp700"))
+        pclog("TP700 HW INT2: from %04X:%08X oldpc=%08X nmi=%d enable=%d mask=%02X "
+              "state=%02X BDA0E=%04X BDA13=%04X\n",
+              CS, cpu_state.pc, cpu_state.oldpc, nmi, nmi_enable, nmi_mask,
+              ram[readmemw(0, 0x040e) * 16 + 1], readmemw(0, 0x040e),
+              readmemw(0, 0x0413));
 
     flags_rebuild();
     cpu_state.pc = cpu_state.oldpc;
@@ -1649,10 +1701,519 @@ x86_int(int num)
     CPU_BLOCK_END();
 }
 
+static int      tp700_int21_pending;
+static uint16_t tp700_int21_return_cs;
+static uint16_t tp700_int21_return_ip;
+static uint8_t  tp700_int21_pending_ah;
+static uint8_t  tp700_int21_pending_al;
+static char     tp700_int21_pending_path[129];
+
+/*
+ * The 9552 ESDI BIOS switches between the native disk, the OS-visible disk,
+ * and the hidden 3 MiB System Partition.  These values describe controller
+ * state, not DOS state, so a hard reset must return them to power-on values.
+ * Keeping them as function-local statics made a Reference-Diskette-requested
+ * POST briefly inherit the old System Partition window; depending on the ROM
+ * timing, an early IML read could then address the wrong physical sector and
+ * report I9990303.
+ */
+static uint32_t tp700_visible_sectors;
+static int      tp700_service_window;
+static int      tp700_reference_floppy_boot;
+
+void
+tp700_int13_reset_state(void)
+{
+    tp700_visible_sectors       = 0;
+    tp700_service_window        = 0;
+    tp700_reference_floppy_boot = 0;
+    pclog("TP700 INT13: ESDI/System Partition window reset to power-on state\n");
+}
+
+void
+tp700_int21_trace_begin(uint16_t return_cs, uint16_t return_ip, uint8_t ah, uint8_t al,
+                        const char *path)
+{
+    tp700_int21_pending    = 1;
+    tp700_int21_return_cs  = return_cs;
+    tp700_int21_return_ip  = return_ip;
+    tp700_int21_pending_ah = ah;
+    tp700_int21_pending_al = al;
+    strncpy(tp700_int21_pending_path, path, sizeof(tp700_int21_pending_path) - 1);
+    tp700_int21_pending_path[sizeof(tp700_int21_pending_path) - 1] = 0;
+}
+
+void
+tp700_int21_trace_return(uint16_t return_cs, uint16_t return_ip, uint16_t ax, uint16_t flags)
+{
+    if (!tp700_int21_pending || (return_cs != tp700_int21_return_cs) ||
+        (return_ip != tp700_int21_return_ip))
+        return;
+
+    pclog("TP700 INT21 RESULT: AH=%02X AL=%02X path=\"%s\" "
+          "carry=%u AX=%04X\n",
+          tp700_int21_pending_ah, tp700_int21_pending_al,
+          tp700_int21_pending_path, !!(flags & C_FLAG), ax);
+    tp700_int21_pending = 0;
+}
+
 void
 x86_int_sw(int num)
 {
     uint32_t addr;
+    static unsigned tp700_int13_traces = 0;
+    static unsigned tp700_int21_file_traces = 0;
+    static unsigned tp700_sw_int0a_traces = 0;
+    static unsigned tp700_sw_int1c_traces = 0;
+    static int      tp700_int13_caller_dumped = 0;
+
+    /*
+     * IBM's ESDI system-partition extension can reduce the drive's reported
+     * last RBA while leaving the physical medium intact.  Zero means that no
+     * reduced boundary has been selected yet, so the complete image is
+     * visible.  The Reference Diskette restores the native boundary during
+     * POST and later hides its 3 MiB service area before booting the OS.
+     */
+    /*
+     * Trace the DOS file requests made by the Reference Diskette while the
+     * ThinkPad-specific configuration path is being validated.  This is kept
+     * deliberately narrow: only calls which identify a drive or pathname are
+     * recorded, so normal console I/O does not drown out the failing request.
+     */
+    if ((num == 0x21) && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+        (tp700_int21_file_traces < 4096)) {
+        const int has_path = (AH == 0x3c) || (AH == 0x3d) || (AH == 0x41) ||
+                             (AH == 0x43) || (AH == 0x4e) || (AH == 0x56) ||
+                             (AH == 0x5b) || (AH == 0x6c);
+
+        if (has_path || (AH == 0x0e) || (AH == 0x19) || (AH == 0x36) ||
+            (AH == 0x39) || (AH == 0x3a) || (AH == 0x3b)) {
+            char path[129];
+            unsigned path_length = 0;
+
+            const uint16_t path_offset = (AH == 0x6c) ? SI : DX;
+
+            if (has_path || (AH == 0x39) || (AH == 0x3a) || (AH == 0x3b)) {
+                while (path_length < sizeof(path) - 1) {
+                    const uint8_t byte = readmembl(ds + ((path_offset + path_length) & 0xffff));
+
+                    if (!byte)
+                        break;
+                    path[path_length++] = ((byte >= 0x20) && (byte < 0x7f)) ? byte : '.';
+                }
+            }
+            path[path_length] = 0;
+            tp700_int21_file_traces++;
+            pclog("TP700 INT21 FILE: index=%u from=%04X:%04X AH=%02X "
+                  "AL=%02X BX=%04X CX=%04X DX=%04X DS=%04X path=\"%s\" "
+                  "target=%04X:%04X\n",
+                  tp700_int21_file_traces, CS,
+                  (uint16_t) (cpu_state.pc - 2), AH, AL, BX, CX, DX, DS, path,
+                  readmemw(0, 0x0086), readmemw(0, 0x0084));
+            tp700_int21_trace_begin(CS, (uint16_t) cpu_state.pc, AH, AL, path);
+        }
+    }
+
+    if ((num == 0x1c) && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+        (tp700_sw_int1c_traces++ < 64))
+        pclog("TP700 SW INT1C: from=%04X:%04X target=%04X:%04X "
+              "bytes=%02X %02X %02X %02X %02X "
+              "SS:SP=%04X:%04X master=%02X/%02X/%02X\n",
+              CS, (uint16_t) (cpu_state.pc - 2),
+              readmemw(0, 0x0072), readmemw(0, 0x0070),
+              readmemb(0, 0xfff53), readmemb(0, 0xfff54),
+              readmemb(0, 0xfff55), readmemb(0, 0xfff56),
+              readmemb(0, 0xfff57),
+              SS, SP, pic.irr, pic.isr, pic.imr);
+
+    if ((num == 0x0a) && !strcmp(machine_get_internal_name(), "ibmtp700")) {
+        const unsigned trace_index = tp700_sw_int0a_traces++;
+
+        if (trace_index < 64)
+            pclog("TP700 SW INT0A: index=%u from=%04X:%04X "
+                  "AX=%04X BX=%04X CX=%04X DX=%04X SS:SP=%04X:%04X\n",
+                  trace_index, CS, (uint16_t) (cpu_state.pc - 2),
+                  AX, BX, CX, DX, SS, SP);
+    }
+
+    if ((num == 0x13) && !strcmp(machine_get_internal_name(), "ibmtp700")) {
+        /*
+         * Once the Reference Diskette's own boot code starts issuing floppy
+         * requests, its fixed disk C: is the logical System Partition.  The
+         * ESDI controller keeps that alternate window as controller state;
+         * it is not re-selected by every DOS program.  Model that state here
+         * before DOS performs its first fixed-disk probe.
+         */
+        if (!(DL & 0x80) && (CS != 0xf000) && !tp700_hdd_os_active &&
+            (tp700_hdd_boot_pending != 2)) {
+            tp700_reference_floppy_boot = 1;
+            tp700_post_memory_display_finish();
+        }
+
+        if ((DL & 0x80) && (CS != 0xf000) &&
+            tp700_reference_floppy_boot && !tp700_hdd_os_active &&
+            (tp700_hdd_boot_pending != 2) && !tp700_service_window) {
+            tp700_service_window = 1;
+            pclog("TP700 INT13: Reference-Diskette DOS selected System "
+                  "Partition window\n");
+        }
+
+        /*
+         * A Reference-Diskette "Start operating system" request performs a
+         * complete hard POST first.  At the ROM's normal A: boot-sector read,
+         * make the one-shot hand-off to the hard-disk MBR instead.  The
+         * Reference Diskette stays mounted for the next cold start.
+         */
+        if ((tp700_hdd_boot_pending == 1) && (CS == 0xf000) && (AH == 0x02) &&
+            (AL == 0x01) && (ES == 0x0000) && (BX == 0x7c00) &&
+            (CX == 0x0001) && (DX == 0x0000)) {
+            /*
+             * Let the ROM finish its own bootstrap path, but substitute the
+             * fixed disk for its pending A: boot-sector request.  Returning
+             * through the ROM is important: it leaves the post-POST IVT/BDA
+             * and stack intact, and it carries DL=80h into the MBR exactly as
+             * a conventional hard-disk boot does.
+             */
+            DL = 0x80;
+            tp700_service_window       = 0;
+            tp700_reference_floppy_boot = 0;
+            /* The ROM has already selected the OS-visible ESDI boundary. */
+            {
+                const uint32_t ebda = (uint32_t) readmemw(0, 0x040e) << 4;
+
+                if (ebda && (ebda + 0x00be < mem_size * 1024))
+                    writemembl(ebda + 0x00be, 0x00);
+            }
+            /* Stage 2 reloads the MBR at the ROM's final 0000:7C00 jump. */
+            tp700_hdd_boot_pending = 2;
+            pclog("TP700 BOOT HANDOFF: substituting HDD MBR for ROM A: read\n");
+        }
+
+        const unsigned trace_index = tp700_int13_traces++;
+
+        if ((trace_index < 96) || ((trace_index & 0x3f) == 0) || (DL & 0x80))
+            pclog("TP700 INT13 CALL: index=%u from=%04X:%04X phys=%08X AX=%04X "
+                  "BX=%04X CX=%04X DX=%04X ES=%04X buffer=%08X "
+                  "SS:SP=%04X:%04X FLAGS=%04X vector=%04X:%04X\n",
+                  trace_index, CS, (uint16_t) (cpu_state.pc - 2),
+                  cs + ((cpu_state.pc - 2) & 0xffff), AX, BX,
+                  CX, DX, ES, es + BX, SS, SP, cpu_state.flags,
+                  readmemw(0, 0x004e), readmemw(0, 0x004c));
+
+        /*
+         * The 9552 ROM talks to its planar ESDI hardware through a small
+         * serial-storage front end which the desktop Model 50 base does not
+         * provide.  Its Reference Diskette consequently sees the DF9F POS
+         * adapter, but the BIOS leaves the fixed-disk count at zero and its
+         * INT 13h path cannot transfer sectors.  Register the configured
+         * ESDI image once DOS starts using the BIOS, and service the standard
+         * fixed-disk calls here.  Floppy calls still follow the real 9552 ROM.
+         */
+        if ((CS != 0xf000) && hdd_is_valid(0))
+            ram[0x475] = 1;
+
+        if ((DL & 0x80) && hdd_is_valid(0)) {
+            const uint32_t cylinders = hdd[0].tracks;
+            const uint32_t heads     = hdd[0].hpc;
+            const uint32_t sectors   = hdd[0].spt;
+            const uint32_t total     = cylinders * heads * sectors;
+            const uint32_t visible_total =
+                (tp700_visible_sectors && (tp700_visible_sectors <= total)) ?
+                tp700_visible_sectors : total;
+            const uint32_t service_sectors = 0x1800;
+            const uint32_t access_base =
+                tp700_service_window && (total >= service_sectors) ?
+                total - service_sectors : 0;
+            const uint32_t accessible_total =
+                tp700_service_window && (total >= service_sectors) ?
+                service_sectors : visible_total;
+            const uint32_t cylinder  = CH | ((CL & 0xc0) << 2);
+            const uint32_t sector    = CL & 0x3f;
+            const uint32_t count     = AL ? AL : 256;
+            uint32_t       lba       = ((cylinder * heads) + DH) * sectors +
+                                     (sector ? sector - 1 : 0);
+            const uint32_t buffer    = es + BX;
+            uint8_t       *transfer  = NULL;
+            int            result    = 0;
+            int            handled   = 1;
+
+            flags_rebuild();
+            switch (AH) {
+                case 0x00: /* Reset disk system. */
+                case 0x09: /* Initialize drive parameters. */
+                case 0x0c: /* Seek. */
+                case 0x0d: /* Alternate disk reset. */
+                case 0x10: /* Check drive ready. */
+                case 0x11: /* Recalibrate. */
+                case 0x14: /* Controller diagnostic. */
+                case 0x16: /* Disk change status. */
+                case 0x17: /* Set disk type. */
+                case 0x19: /* Park heads. */
+                    AH = 0;
+                    break;
+
+                case 0x01: /* Return last operation status. */
+                    AH = 0;
+                    break;
+
+                case 0x1f:
+                    /*
+                     * Private IBM ESDI system-partition extension used by the
+                     * ThinkPad 700 ROM and Reference Diskette:
+                     *
+                     *   AL=03 returns the native last RBA in CX:DX.
+                     *   AL=01 converts the absolute RBA in BX:CX to CHS.
+                     *   AL=00 selects the last OS-visible RBA in BX:CX.
+                     *   AL=02 maps CHS zero to the 3 MiB service area.
+                     *
+                     * The ROM subtracts 17FFh from the returned last RBA,
+                     * producing the first sector of its 1800h-sector (3 MiB)
+                     * service area, and then passes start-1 to AL=00.  Thus
+                     * the service area remains physically present but is not
+                     * exposed through normal INT 13h calls after POST.
+                     */
+                    if (AL == 0x00) {
+                        const uint32_t last_rba = ((uint32_t) BX << 16) | CX;
+
+                        if (last_rba >= total) {
+                            AH     = 0x04;
+                            result = -1;
+                            break;
+                        }
+                        tp700_visible_sectors = last_rba + 1;
+                        tp700_service_window = 0;
+                        AH = 0;
+                        pclog("TP700 INT13 1F00: visible last RBA=%u "
+                              "sectors=%u/%u\n",
+                              last_rba, tp700_visible_sectors, total);
+                        break;
+                    }
+                    if (AL == 0x01) {
+                        const uint32_t rba = ((uint32_t) BX << 16) | CX;
+                        const int rba_in_window = !tp700_service_window ||
+                                                  ((rba >= access_base) &&
+                                                   (rba < total));
+                        const uint32_t window_rba =
+                            tp700_service_window && rba_in_window ?
+                            rba - access_base : rba;
+                        const uint32_t chs_cylinder =
+                            window_rba / (heads * sectors);
+                        const uint32_t chs_remainder =
+                            window_rba % (heads * sectors);
+                        const uint32_t chs_head = chs_remainder / sectors;
+                        const uint32_t chs_sector = (chs_remainder % sectors) + 1;
+
+                        if (!rba_in_window || (rba >= total) ||
+                            (window_rba >= accessible_total) ||
+                            (chs_cylinder >= 1024)) {
+                            if (!tp700_int13_caller_dumped) {
+                                const uint32_t caller = cs + ((cpu_state.pc - 2) & 0xffff);
+                                const uint16_t return_ip = readmemw(ss, SP);
+                                const uint16_t return_cs = readmemw(ss, (SP + 2) & 0xffff);
+                                const uint32_t return_base =
+                                    (return_cs == CS) ? cs : ((uint32_t) return_cs << 4);
+                                const uint32_t return_linear = return_base + return_ip;
+
+                                tp700_int13_caller_dumped = 1;
+                                pclog("TP700 INT13 1F01 caller dump: CS=%04X base=%08X "
+                                      "IP=%04X linear=%08X return=%04X:%04X "
+                                      "return-linear=%08X stack=%04X/%04X/%04X/%04X\n",
+                                      CS, cs, (uint16_t) (cpu_state.pc - 2), caller,
+                                      return_cs, return_ip, return_linear,
+                                      readmemw(ss, SP), readmemw(ss, (SP + 2) & 0xffff),
+                                      readmemw(ss, (SP + 4) & 0xffff),
+                                      readmemw(ss, (SP + 6) & 0xffff));
+                                for (uint32_t row = caller - 128; row < caller + 128; row += 16) {
+                                    pclog("TP700 CALLER %08X:", row);
+                                    for (uint32_t column = 0; column < 16; column++)
+                                        pclog(" %02X", readmembl(row + column));
+                                    pclog("\n");
+                                }
+                                for (uint32_t row = return_linear - 256;
+                                     row < return_linear + 256; row += 16) {
+                                    pclog("TP700 RETURN %08X:", row);
+                                    for (uint32_t column = 0; column < 16; column++)
+                                        pclog(" %02X", readmembl(row + column));
+                                    pclog("\n");
+                                }
+                            }
+                            AH     = 0x04;
+                            result = -1;
+                            break;
+                        }
+                        CH = chs_cylinder & 0xff;
+                        CL = chs_sector | ((chs_cylinder >> 2) & 0xc0);
+                        DH = chs_head;
+                        AH = 0;
+                        pclog("TP700 INT13 1F01: RBA=%u window-RBA=%u -> "
+                              "CHS=%u/%u/%u\n", rba, window_rba,
+                              chs_cylinder, chs_head, chs_sector);
+                        break;
+                    }
+                    if (AL == 0x02) {
+                        if (total < service_sectors) {
+                            AH     = 0x04;
+                            result = -1;
+                            break;
+                        }
+                        /*
+                         * The maintenance programs switch the ESDI BIOS to a
+                         * separate logical drive window before formatting and
+                         * copying the System Partition.  Their following CHS
+                         * 0/0/1 request therefore means the first sector of
+                         * the reserved area, not physical sector zero.
+                         */
+                        tp700_service_window = 1;
+                        AH = 0;
+                        pclog("TP700 INT13 1F02: service window base=%u "
+                              "sectors=%u\n", total - service_sectors,
+                              service_sectors);
+                    } else if (AL == 0x03) {
+                        const uint32_t last_rba = total - 1;
+
+                        CX = last_rba >> 16;
+                        DX = last_rba & 0xffff;
+                        AH = 0;
+                        pclog("TP700 INT13 1F03: native last RBA=%u "
+                              "CX:DX=%04X:%04X\n",
+                              last_rba, CX, DX);
+                    } else {
+                        AH     = 0x01;
+                        result = -1;
+                    }
+                    break;
+
+                case 0x02: /* Read sectors. */
+                case 0x03: /* Write sectors. */
+                case 0x04: /* Verify sectors. */
+                case 0x0a: /* Read long (data portion). */
+                case 0x0b: /* Write long (data portion). */
+                    if (!sector || (DH >= heads) ||
+                        (cylinder >= cylinders) ||
+                        (lba + count > accessible_total)) {
+                        result = -1;
+                        AH     = 0x04;
+                        break;
+                    }
+                    if (AH != 0x04) {
+                        transfer = malloc(count * 512);
+                        if (!transfer) {
+                            result = -1;
+                            AH     = 0x20;
+                            break;
+                        }
+                        if ((AH == 0x03) || (AH == 0x0b)) {
+                            for (uint32_t i = 0; i < count * 512; i++)
+                                transfer[i] = readmembl(buffer + i);
+                            result = hdd_image_write(0, access_base + lba,
+                                                     count, transfer);
+                        } else {
+                            result = hdd_image_read(0, access_base + lba,
+                                                    count, transfer);
+                            if (!result)
+                                for (uint32_t i = 0; i < count * 512; i++)
+                                    writemembl(buffer + i, transfer[i]);
+                        }
+                        free(transfer);
+                    }
+                    if (!result) {
+                        AH = 0;
+                        AL = count & 0xff;
+                    } else if (!AH)
+                        AH = 0x20;
+                    break;
+
+                case 0x05: /* Format track. */
+                case 0x06: /* Format bad track. */
+                case 0x07: /* Format drive. */
+                    if ((DH >= heads) || (cylinder >= cylinders) ||
+                        ((((cylinder * heads) + DH) * sectors) + sectors >
+                         accessible_total)) {
+                        result = -1;
+                        AH     = 0x04;
+                    } else {
+                        const uint32_t track_lba =
+                            ((cylinder * heads) + DH) * sectors;
+                        result = hdd_image_zero(0, access_base + track_lba,
+                                                sectors);
+                        AH     = result ? 0x20 : 0;
+                    }
+                    break;
+
+                case 0x08: { /* Get drive parameters. */
+                    const uint32_t visible_cylinders =
+                        (accessible_total + (heads * sectors) - 1) /
+                        (heads * sectors);
+                    const uint32_t last_cylinder = visible_cylinders - 1;
+                    CH = last_cylinder & 0xff;
+                    CL = sectors | ((last_cylinder >> 2) & 0xc0);
+                    DH = heads - 1;
+                    DL = 1;
+                    AH = 0;
+                    break;
+                }
+
+                case 0x15: /* Get drive type and sector count. */
+                    AH = 0x03;
+                    CX = accessible_total >> 16;
+                    DX = accessible_total & 0xffff;
+                    break;
+
+                case 0x1a: /* Format ESDI unit. */
+                    result = hdd_image_zero(0, access_base, accessible_total);
+                    AH     = result ? 0x20 : 0;
+                    break;
+
+                default:
+                    handled = 0;
+                    break;
+            }
+
+            if (handled) {
+                if (result)
+                    cpu_state.flags |= C_FLAG;
+                else
+                    cpu_state.flags &= ~C_FLAG;
+                flags_extract();
+                cycles -= timing_int;
+                pclog("TP700 INT13 ESDI: AH=%02X lba=%u physical=%u count=%u result=%d "
+                      "AX=%04X CX=%04X DX=%04X FLAGS=%04X\n",
+                      AH, lba, access_base + lba, count, result, AX, CX, DX,
+                      cpu_state.flags);
+                /* A dynarec block may run across the ROM's F29DDh/7C00h
+                   boundary, so the fetch-loop hand-off is not guaranteed to
+                   observe stage 2.  Once the substituted boot-sector read
+                   has succeeded, enter the already-loaded HDD MBR here. */
+                if (!result && (tp700_hdd_boot_pending == 2)) {
+                    pclog("TP700 BOOT HANDOFF: entering HDD MBR after "
+                          "substituted boot read\n");
+                    tp700_boot_hdd_post();
+                }
+                CPU_BLOCK_END();
+                return;
+            }
+        }
+    }
+
+    if (0 && (num == 0x15) && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+        ((AX == 0x9001) || (AX == 0x9101) ||
+         ((AX & 0xff00) == 0x2100) ||
+         ((AX & 0xff00) == 0xc200) || ((AX & 0xff00) == 0xd200)))
+        pclog("TP700 INT15 CALL: AX=%04X BX=%04X CX=%04X DX=%04X "
+              "ES:DI=%04X:%04X DS:SI=%04X:%04X from=%04X:%04X "
+              "SS:SP=%04X:%04X FLAGS=%04X vector=%04X:%04X msw=%04X "
+              "use32=%03X stack32=%d stack=%04X %04X %04X %04X\n",
+              AX, BX, CX, DX, ES, DI, DS, SI,
+              CS, (uint16_t) (cpu_state.pc - 2), SS, (uint16_t) ESP,
+              cpu_state.flags, readmemw(0, 0x0056), readmemw(0, 0x0054),
+              msw, use32, stack32,
+              readmemw(ss, SP), readmemw(ss, (SP + 2) & 0xffff),
+              readmemw(ss, (SP + 4) & 0xffff),
+              readmemw(ss, (SP + 6) & 0xffff));
+
+    if ((num == 2) && !strcmp(machine_get_internal_name(), "ibmtp700"))
+        pclog("TP700 SW INT2: from %04X:%08X nmi=%d enable=%d mask=%02X\n",
+              CS, cpu_state.pc, nmi, nmi_enable, nmi_mask);
 
     flags_rebuild();
     cycles -= timing_int;
@@ -2242,6 +2803,9 @@ nmi_raise(void)
     if (is486 && (cpu_fast_off_flags & 0x20000000))
         cpu_fast_off_advance();
 
+    if (!strcmp(machine_get_internal_name(), "ibmtp700"))
+        pclog("TP700 NMI RAISE: at %04X:%08X mask=%02X\n",
+              CS, cpu_state.pc, nmi_mask);
     nmi = 1;
 }
 

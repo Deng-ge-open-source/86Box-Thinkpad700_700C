@@ -98,6 +98,20 @@ port_92_writeb(uint16_t port, uint8_t val, void *priv)
     if (port != 0x92)
         return;
 
+    /*
+     * The 9552 ROM reaches its warm-start entry by jumping to the reset
+     * vector rather than pulsing bit 0 of port 92h.  Once that path has
+     * disabled A20, honor the Reference Diskette's FEDCh request and enter
+     * the fixed-disk bootstrap.  This leaves A: mounted for the next launch.
+     */
+    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+        ((ram[0x472] | (ram[0x473] << 8)) == 0xfedc)) {
+        ram[0x472] = ram[0x473] = 0;
+        tp700_hdd_boot_pending  = 1;
+        pc_reset_hard();
+        return;
+    }
+
     dev->reg = val & 0x03;
 
     if (dev->flags & PORT_92_KEY) {

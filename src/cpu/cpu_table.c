@@ -1856,6 +1856,23 @@ const cpu_family_t cpu_families[] = {
         .internal_name = "ibm486slc",
         .cpus          = (const CPU[]) {
             {
+                .name               = "25",
+                .cpu_type           = CPU_IBM486SLC,
+                .fpus               = fpus_80386,
+                .rspeed             = 25000000,
+                .multi              = 1,
+                .voltage            = 5000,
+                .edx_reset          = 0xA401,
+                .cpuid_model        = 0,
+                .cyrix_id           = 0,
+                .cpu_flags          = CPU_SUPPORTS_DYNAREC,
+                .mem_read_cycles    = 6,
+                .mem_write_cycles   = 6,
+                .cache_read_cycles  = 3,
+                .cache_write_cycles = 3,
+                .atclk_div          = 3
+            },
+            {
                 .name               = "33",
                 .cpu_type           = CPU_IBM486SLC,
                 .fpus               = fpus_80386,

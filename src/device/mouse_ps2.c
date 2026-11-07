@@ -23,6 +23,7 @@
 #include <86box/86box.h>
 #include <86box/device.h>
 #include <86box/keyboard.h>
+#include <86box/machine.h>
 #include <86box/mouse.h>
 #include <86box/plat.h>
 #include <86box/plat_unused.h>
@@ -175,6 +176,22 @@ ps2_write(void *priv)
         if (val == 0xff)
             kbc_at_dev_reset(dev, 1);
         else  switch (dev->command) {
+            case 0xe2: /* IBM TrackPoint controller command */
+                /*
+                 * The ThinkPad 700 POST sends E2 41 to enable the external
+                 * pointing-device port behind its TrackPoint controller.
+                 * A plain PS/2 mouse rejects E2 with RESEND, which the 9552
+                 * reports as 08611 (8042-to-IPDC interface failure).
+                 * TrackPoint commands acknowledge every valid command byte;
+                 * 41 has no data response.
+                 */
+                if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+                    (val == 0x41))
+                    kbc_at_dev_queue_add(dev, 0xfa, 0);
+                else
+                    kbc_at_dev_queue_add(dev, 0xfe, 0);
+                break;
+
             case 0xe8: /* set mouse resolution */
                 dev->resolution = val;
                 kbc_at_dev_queue_add(dev, 0xfa, 0);
@@ -195,6 +212,16 @@ ps2_write(void *priv)
         dev->command = val;
 
         switch (dev->command) {
+            case 0xe2: /* IBM TrackPoint controller command prefix */
+                if (!strcmp(machine_get_internal_name(), "ibmtp700")) {
+                    dev->flags |= FLAG_CTRLDAT;
+                    kbc_at_dev_queue_add(dev, 0xfa, 0);
+                    dev->state = DEV_STATE_MAIN_WANT_IN;
+                } else {
+                    kbc_at_dev_queue_add(dev, 0xfe, 0);
+                }
+                break;
+
             case 0xe6: /* set scaling to 1:1 */
                 mouse_ps2_log("%s: Set scaling to 1:1\n", dev->name);
                 dev->flags &= ~FLAG_SCALED;

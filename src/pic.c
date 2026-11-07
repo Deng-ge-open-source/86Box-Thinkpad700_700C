@@ -690,6 +690,12 @@ picint_common(uint16_t num, int level, int set, uint8_t *irq_state)
     uint16_t w;
     pic_t   *dev;
 
+    if (!strcmp(machine_get_internal_name(), "ibmtp700") && (num & 0x2000))
+        pclog("TP700 IRQ13 %s: at %04X:%08X level=%d master=%02X/%02X "
+              "slave=%02X/%02X\n",
+              set ? "RAISE" : "LOWER", CS, cpu_state.pc, level,
+              pic.irr, pic.isr, pic2.irr, pic2.isr);
+
     /*
        Do this because some emulated cards will, for whatever reason, attempt to
        raise an IRQ at init when the PIC has not yet been properly initialized.
@@ -921,6 +927,11 @@ picinterrupt(void)
             update_pending();
         }
     }
+
+    if (!strcmp(machine_get_internal_name(), "ibmtp700") && (ret == 0x75))
+        pclog("TP700 PIC VECTOR 75: at %04X:%08X master=%02X/%02X "
+              "slave=%02X/%02X\n",
+              CS, cpu_state.pc, pic.irr, pic.isr, pic2.irr, pic2.isr);
 
     return ret;
 }

@@ -23,6 +23,7 @@
 
 #define HAVE_STDARG_H
 #include <86box/86box.h>
+#include <86box/hdd.h>
 #include "cpu.h"
 #include "x86.h"
 #include "x86seg_common.h"
@@ -67,6 +68,10 @@ int nmi_auto_clear = 0;
 /* Was the CPU ever reset? */
 int x86_was_reset  = 0;
 int soft_reset_pci = 0;
+
+/* One-shot Reference Diskette -> fixed-disk boot request. */
+int tp700_hdd_boot_pending = 0;
+int tp700_hdd_os_active    = 0;
 
 /* Is the TRAP flag on? */
 int trap = 0;
@@ -385,17 +390,164 @@ reset_common(int hard)
 void
 resetx86(void)
 {
+    tp700_hdd_os_active = 0;
+    if (!strcmp(machine_get_internal_name(), "ibmtp700"))
+        tp700_int13_reset_state();
     reset_common(1);
 
     soft_reset_mask = 0;
+}
+
+/*
+ * Enter the configured fixed disk's MBR using the real-mode register state
+ * established by a conventional BIOS bootstrap.
+ */
+int
+tp700_boot_hdd(void)
+{
+    uint8_t boot_sector[512];
+    uint16_t entry;
+
+    if (strcmp(machine_get_internal_name(), "ibmtp700") ||
+        !hdd_is_valid(0) || hdd_image_read(0, 0, 1, boot_sector))
+        return 0;
+
+    reset_common(0);
+
+    /*
+     * Reference Diskette is a DOS program and leaves INT 20h..3Fh pointing
+     * into its own transient image.  PC DOS' IBMBIO calls INT 2Fh before it
+     * installs DOS vectors; following the stale Reference-Diskette hook sends
+     * execution into freed memory.  Recreate the BIOS warm-boot IVT: an IRET
+     * stub for the DOS/software range and the 9552 ROM's own BIOS/IRQ tables.
+     */
+    ram[0x0600] = 0xcf;
+    for (uint16_t vector = 0x20; vector <= 0x3f; vector++) {
+        ram[vector * 4]     = 0x00;
+        ram[vector * 4 + 1] = 0x06;
+        ram[vector * 4 + 2] = 0x00;
+        ram[vector * 4 + 3] = 0x00;
+    }
+    for (uint16_t vector = 0x08; vector <= 0x1f; vector++) {
+        const uint32_t table = 0x3fef3 + ((vector - 0x08) << 1);
+        entry                = rom[table] | (rom[table + 1] << 8);
+        ram[vector * 4]      = entry & 0xff;
+        ram[vector * 4 + 1]  = entry >> 8;
+        ram[vector * 4 + 2]  = 0x00;
+        ram[vector * 4 + 3]  = entry ? 0xf0 : 0x00;
+    }
+    for (uint16_t vector = 0x70; vector <= 0x77; vector++) {
+        const uint32_t table = 0x3ff23 + ((vector - 0x70) << 1);
+        entry                = rom[table] | (rom[table + 1] << 8);
+        ram[vector * 4]      = entry & 0xff;
+        ram[vector * 4 + 1]  = entry >> 8;
+        ram[vector * 4 + 2]  = 0x00;
+        ram[vector * 4 + 3]  = entry ? 0xf0 : 0x00;
+    }
+
+    for (uint32_t i = 0; i < sizeof(boot_sector); i++)
+        writemembl(0x7c00 + i, boot_sector[i]);
+
+    EAX = EBX = ECX = EDX = ESI = EDI = EBP = ESP = 0;
+    SP = 0x7c00;
+    DL = 0x80;
+    ram[0x472]       = 0;
+    ram[0x473]       = 0;
+    loadcs(0x0000);
+    cpu_state.pc     = 0x7c00;
+    cpu_state.flags  = 2;
+    cpu_state.eflags = 0;
+    ram[0x475]       = 1;
+    flushmmucache();
+    return 1;
+}
+
+/*
+ * Enter the fixed-disk bootstrap after a complete BIOS POST.  Unlike the
+ * Reference-Diskette fallback above, this path deliberately retains the IVT,
+ * BDA, keyboard controller and memory state just initialized by the 9552 ROM.
+ */
+int
+tp700_boot_hdd_post(void)
+{
+    uint8_t boot_sector[512];
+
+    if (strcmp(machine_get_internal_name(), "ibmtp700") ||
+        !hdd_is_valid(0) || hdd_image_read(0, 0, 1, boot_sector))
+        return 0;
+
+    for (uint32_t i = 0; i < sizeof(boot_sector); i++)
+        writemembl(0x7c00 + i, boot_sector[i]);
+
+    EAX = EBX = ECX = EDX = ESI = EDI = EBP = ESP = 0;
+    SP = 0x7c00;
+    DL = 0x80;
+    ram[0x472]       = 0;
+    ram[0x473]       = 0;
+    ram[0x475]       = 1;
+    loadcs(0x0000);
+    cpu_state.pc     = 0x7c00;
+    cpu_state.flags  = 2;
+    cpu_state.eflags = 0;
+    flushmmucache();
+    tp700_post_memory_display_finish();
+    tp700_hdd_boot_pending = 0;
+    tp700_hdd_os_active    = 1;
+    return 1;
 }
 
 /* Soft reset. */
 void
 softresetx86(void)
 {
+    const uint16_t warm_start = ram[0x472] | (ram[0x473] << 8);
+
     if (soft_reset_mask)
         return;
+
+    if (!strcmp(machine_get_internal_name(), "ibmtp700"))
+        pclog("TP700 SOFT RESET: from=%04X:%04X warm=%04X hdd=%d count=%u\n",
+              CS, (uint16_t) cpu_state.pc, warm_start, hdd_is_valid(0),
+              ram[0x475]);
+
+    /*
+     * The ThinkPad 700 Reference Diskette writes FEDCh to the warm-start
+     * flag before asking the BIOS to start the normal operating system.
+     */
+    if (warm_start == 0xfedc) {
+        ram[0x472] = ram[0x473] = 0;
+        tp700_hdd_boot_pending  = 1;
+        pc_reset_hard();
+        return;
+    }
+
+    /*
+     * A zero warm-start word means the 9552 planar is being cold-reset.
+     * The Reference Diskette uses exactly this form after automatic
+     * configuration.  Resetting only the CPU leaves the planar and its BIOS
+     * shadow in their run-time state, so the ROM repeatedly re-enters its
+     * shutdown dispatch instead of performing POST.
+     */
+    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+        (warm_start == 0x0000)) {
+        uint8_t shutdown;
+
+        outb(0x0070, 0x0f);
+        shutdown = inb(0x0071);
+        /*
+         * The 9552 uses the same reset stub for two different jobs.  A
+         * non-zero RTC shutdown byte is the normal 386 protected-mode return
+         * path and must remain a CPU-only reset.  Automatic Configuration,
+         * on the other hand, leaves shutdown byte 0 and requests a genuine
+         * cold reset so that the new planar NVR is reloaded.
+         */
+        if (shutdown == 0x00) {
+            pc_reset_hard();
+            cpu_block_end = 1;
+            cycles        = 0;
+            return;
+        }
+    }
 
     reset_common(0);
 }
@@ -404,6 +556,9 @@ softresetx86(void)
 void
 hardresetx86(void)
 {
+    if (!strcmp(machine_get_internal_name(), "ibmtp700"))
+        machine_thinkpad_700_reset_shadow();
+
     dma_reset();
     /* TODO: Hack, but will do for time being, because all AT machines currently are 286+,
        and vice-versa. */

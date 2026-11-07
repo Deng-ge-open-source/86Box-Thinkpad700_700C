@@ -2,6 +2,12 @@
 #include <stdint.h>
 #include <wchar.h>
 
+#ifndef _WIN32
+#    include <execinfo.h>
+#    include <signal.h>
+#    include <unistd.h>
+#endif
+
 #include <SDL.h>
 
 #ifdef _WIN32
@@ -285,6 +291,10 @@ SDL_mutex *mousemutex;
 int        real_sdl_w;
 int        real_sdl_h;
 
+extern void tp700_panel_export_tick(void);
+extern void tp700_panel_export_close(void);
+extern void tp700_panel_controls_close(void);
+
 uint32_t
 timer_onesec(uint32_t interval, UNUSED(void *param))
 {
@@ -293,11 +303,33 @@ timer_onesec(uint32_t interval, UNUSED(void *param))
 }
 
 extern int gfxcard[GFXCARD_MAX];
+
+#ifndef _WIN32
+static void
+tp700_debug_crash_handler(int sig)
+{
+    void *frames[64];
+    int   count = backtrace(frames, 64);
+
+    dprintf(STDERR_FILENO, "TP700 host crash: signal=%d frames=%d\n", sig, count);
+    backtrace_symbols_fd(frames, count, STDERR_FILENO);
+    _exit(128 + sig);
+}
+#endif
+
 int
 main(int argc, char **argv)
 {
     SDL_Event event;
     int       ret = 0;
+    int       fullscreen_hotkey_down = 0;
+    int       mouse_release_hotkey_down = 0;
+    int       ctrl_hotkey_mask = 0;
+
+#ifndef _WIN32
+    signal(SIGSEGV, tp700_debug_crash_handler);
+    signal(SIGBUS, tp700_debug_crash_handler);
+#endif
 
     SDL_Init(0);
     ret = pc_init(argc, argv);
@@ -326,7 +358,15 @@ main(int argc, char **argv)
     if (start_in_fullscreen)
         video_fullscreen = 1;
 
-    sdl_initho();
+    /*
+     * The Orange Pi image has no usable accelerated GLX path.  Asking SDL
+     * for OpenGL therefore creates an eight-thread llvmpipe renderer just to
+     * scale a 640x480 LCD surface.  Apart from wasting a core, that makes
+     * pointer motion and Windows 3.x popup redraws visibly stutter.  The
+     * SDL software renderer is both cheaper and more predictable for this
+     * fixed-size panel.
+     */
+    sdl_inits();
 
     /* Fire up the machine. */
     pc_reset_hard_init();
@@ -406,7 +446,7 @@ main(int argc, char **argv)
                         break;
                     case SDL_MOUSEWHEEL:
                         {
-                            if (mouse_capture || video_fullscreen) {
+                            if (mouse_capture) {
                                 if (event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED) {
                                     event.wheel.x *= -1;
                                     event.wheel.y *= -1;
@@ -419,7 +459,7 @@ main(int argc, char **argv)
                         }
                     case SDL_MOUSEMOTION:
                         {
-                            if (mouse_capture || video_fullscreen) {
+                            if (mouse_capture) {
                                 SDL_LockMutex(mousemutex);
                                 mouse_scale(event.motion.xrel, event.motion.yrel);
                                 SDL_UnlockMutex(mousemutex);
@@ -440,7 +480,7 @@ main(int argc, char **argv)
                     case SDL_FINGERMOTION:
                         {
                             // See SDL_TouchFingerEvent
-                            if (mouse_capture || video_fullscreen) {
+                            if (mouse_capture) {
                                 SDL_LockMutex(mousemutex);
 
                                 // Real multiplier is the window size
@@ -457,17 +497,17 @@ main(int argc, char **argv)
                     case SDL_MOUSEBUTTONUP:
                         {
                             if ((event.button.button == SDL_BUTTON_LEFT)
-                                && !(mouse_capture || video_fullscreen)
-                                && event.button.state == SDL_RELEASED
-                                && mouse_inside) {
+                                && !mouse_capture
+                                && event.button.state == SDL_RELEASED) {
                                 plat_mouse_capture(1);
                                 break;
                             }
-                            if (mouse_get_buttons() < 3 && event.button.button == SDL_BUTTON_MIDDLE && !video_fullscreen) {
+                            /* Always keep a mouse-only escape hatch. */
+                            if (event.button.button == SDL_BUTTON_MIDDLE) {
                                 plat_mouse_capture(0);
                                 break;
                             }
-                            if (mouse_capture || video_fullscreen) {
+                            if (mouse_capture) {
                                 int buttonmask = 0;
 
                                 switch (event.button.button) {
@@ -510,6 +550,71 @@ main(int argc, char **argv)
                     case SDL_KEYUP:
                         {
                             uint16_t xtkey = 0;
+                            const SDL_Scancode scancode = event.key.keysym.scancode;
+
+                            /* Keep our own modifier state.  Some SDL/X11
+                               layouts report the Ctrl modifier one event late
+                               for the keypad End key. */
+                            if (scancode == SDL_SCANCODE_LCTRL) {
+                                if (event.type == SDL_KEYDOWN)
+                                    ctrl_hotkey_mask |= 1;
+                                else
+                                    ctrl_hotkey_mask &= ~1;
+                            } else if (scancode == SDL_SCANCODE_RCTRL) {
+                                if (event.type == SDL_KEYDOWN)
+                                    ctrl_hotkey_mask |= 2;
+                                else
+                                    ctrl_hotkey_mask &= ~2;
+                            }
+
+                            /*
+                             * The SDL front end did not consume the advertised
+                             * Ctrl+Alt+PgUp accelerator, so the combination was
+                             * sent only to the guest.  Implement it here as a
+                             * real toggle in both directions.
+                             */
+                            if ((event.key.keysym.scancode == SDL_SCANCODE_PAGEUP) &&
+                                (((event.key.keysym.mod & KMOD_CTRL) &&
+                                  (event.key.keysym.mod & KMOD_ALT)) ||
+                                 fullscreen_hotkey_down)) {
+                                if ((event.type == SDL_KEYDOWN) && !event.key.repeat) {
+                                    keyboard_input(0, sdl_to_xt[SDL_SCANCODE_LCTRL]);
+                                    keyboard_input(0, sdl_to_xt[SDL_SCANCODE_RCTRL]);
+                                    keyboard_input(0, sdl_to_xt[SDL_SCANCODE_LALT]);
+                                    keyboard_input(0, sdl_to_xt[SDL_SCANCODE_RALT]);
+                                    video_fullscreen   = video_fullscreen ? 0 : 1;
+                                    fullscreen_pending = 1;
+                                    fullscreen_hotkey_down = 1;
+                                } else if (event.type == SDL_KEYUP) {
+                                    fullscreen_hotkey_down = 0;
+                                }
+                                break;
+                            }
+
+                            /*
+                             * The SDL frontend advertises Ctrl+End as the
+                             * mouse-release shortcut, but unlike the Qt
+                             * frontend it never consumed that accelerator.
+                             * Handle it before forwarding keys to the guest.
+                             */
+                            if (((scancode == SDL_SCANCODE_END) ||
+                                 (scancode == SDL_SCANCODE_KP_1)) &&
+                                ((event.key.keysym.mod & KMOD_CTRL) ||
+                                 ctrl_hotkey_mask ||
+                                 mouse_release_hotkey_down)) {
+                                if ((event.type == SDL_KEYDOWN) && !event.key.repeat) {
+                                    keyboard_input(0, sdl_to_xt[SDL_SCANCODE_LCTRL]);
+                                    keyboard_input(0, sdl_to_xt[SDL_SCANCODE_RCTRL]);
+                                    plat_mouse_capture(0);
+                                    mouse_release_hotkey_down = 1;
+                                    pclog("TP700 INPUT: Ctrl+End released host mouse "
+                                          "(scancode=%d fullscreen=%d)\n",
+                                          scancode, video_fullscreen);
+                                } else if (event.type == SDL_KEYUP) {
+                                    mouse_release_hotkey_down = 0;
+                                }
+                                break;
+                            }
 
                             if (event.key.keysym.scancode == osd_open_first_key)
                             {
@@ -565,6 +670,7 @@ main(int argc, char **argv)
         } while (SDL_PollEvent(&event));
 
 check_flags:
+        tp700_panel_export_tick();
         if (blitreq) {
             extern void sdl_blit(int x, int y, int w, int h);
             sdl_blit(params.x, params.y, params.w, params.h);
@@ -582,10 +688,12 @@ check_flags:
             fullscreen_pending = 0;
         }
         if (exit_event) {
+            tp700_panel_controls_close();
             do_stop();
             break;
         }
     }
+    tp700_panel_export_close();
     printf("\n");
     SDL_DestroyMutex(blitmtx);
     SDL_DestroyMutex(mousemutex);

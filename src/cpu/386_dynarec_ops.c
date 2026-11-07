@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <86box/machine.h>
 #include <wchar.h>
 #include <math.h>
 #ifndef INFINITY

@@ -100,6 +100,25 @@ static struct ps2_t {
     uint8_t mem_pos_regs[8];
     uint8_t mem_2mb_pos_regs[8];
 
+    /* ThinkPad 700 indexed system-control register pair (E0h/E4h). */
+    uint8_t tp700_sysctl_index;
+    uint8_t tp700_sysctl_regs[256];
+    uint8_t tp700_mem_presence_select;
+
+    /* ThinkPad 700 system-management register block (B0h/B1h/B2h). */
+    uint8_t tp700_sm_index;
+    uint8_t tp700_sm_regs[256];
+    uint8_t tp700_sm_status;
+    uint8_t tp700_sm_command;
+    uint8_t tp700_sm_packet[8];
+    uint8_t tp700_sm_packet_pos;
+    uint16_t tp700_sm_parameters[0x200];
+
+    /* ThinkPad 700 planar serial-storage/status ports (78h..7Ch). */
+    uint8_t tp700_ss_regs[5];
+    uint8_t tp700_ss_command;
+    uint16_t tp700_ss_words[64];
+
     int pending_cache_miss;
 
     serial_t *uart;
@@ -108,6 +127,250 @@ static struct ps2_t {
     vga_t *mb_vga;
     int    has_e0000_hole;
 } ps2;
+
+/*
+ * The 9552 can execute a shadowed copy of its 256 KiB firmware while the
+ * DRAM normally hidden at C0000h-FFFFFh is relocated above installed RAM and
+ * tested.  Backing both views with ram[C0000h] (as the temporary Model 50
+ * implementation did) aliases the final 384 KiB POST block onto the running
+ * BIOS.  The memory test then overwrites its own stack/code and warm-resets
+ * forever at checkpoint 52h.  Keep the shadow store physically distinct,
+ * matching the two simultaneous views provided by the 9552 planar.
+ */
+static uint8_t       thinkpad_700_shadow_ram[0x40000];
+static mem_mapping_t thinkpad_700_shadow_mapping;
+
+static uint8_t
+thinkpad_700_shadow_read(uint32_t addr, UNUSED(void *priv))
+{
+    return thinkpad_700_shadow_ram[addr & 0x3ffff];
+}
+
+static uint16_t
+thinkpad_700_shadow_readw(uint32_t addr, UNUSED(void *priv))
+{
+    return *(uint16_t *) &thinkpad_700_shadow_ram[addr & 0x3ffff];
+}
+
+static uint32_t
+thinkpad_700_shadow_readl(uint32_t addr, UNUSED(void *priv))
+{
+    return *(uint32_t *) &thinkpad_700_shadow_ram[addr & 0x3ffff];
+}
+
+static void
+thinkpad_700_shadow_write(uint32_t addr, uint8_t val, UNUSED(void *priv))
+{
+    thinkpad_700_shadow_ram[addr & 0x3ffff] = val;
+}
+
+static void
+thinkpad_700_shadow_writew(uint32_t addr, uint16_t val, UNUSED(void *priv))
+{
+    *(uint16_t *) &thinkpad_700_shadow_ram[addr & 0x3ffff] = val;
+}
+
+static void
+thinkpad_700_shadow_writel(uint32_t addr, uint32_t val, UNUSED(void *priv))
+{
+    *(uint32_t *) &thinkpad_700_shadow_ram[addr & 0x3ffff] = val;
+}
+
+void
+machine_thinkpad_700_reset_shadow(void)
+{
+    if (!rom)
+        return;
+
+    memcpy(thinkpad_700_shadow_ram, rom, sizeof(thinkpad_700_shadow_ram));
+    mem_set_mem_state_both(0x000c0000, sizeof(thinkpad_700_shadow_ram),
+                           MEM_READ_INTERNAL | MEM_WRITE_INTERNAL);
+    flushmmucache();
+}
+
+static uint8_t
+thinkpad_700_sysctl_read(uint16_t port, UNUSED(void *priv))
+{
+    if (port == 0x00e0)
+        return ps2.tp700_sysctl_index;
+
+    /*
+     * E3h is the planar memory-error latch.  Bits 0 and 1 report a detected
+     * RAM/parity fault; they are clear on a healthy board.  Leaving this port
+     * unimplemented returned FFh, so the 9552 POST faithfully took its RAM
+     * failure path and produced 00201 followed by 00164 after every test.
+     */
+    if (port == 0x00e3)
+        return 0x00;
+
+    return ps2.tp700_sysctl_regs[ps2.tp700_sysctl_index];
+}
+
+static void
+thinkpad_700_sysctl_write(uint16_t port, uint8_t val, UNUSED(void *priv))
+{
+    if (port == 0x00e0)
+        ps2.tp700_sysctl_index = val;
+    else if (port == 0x00e3)
+        return; /* Writing the status port acknowledges/clears the latch. */
+    else
+        ps2.tp700_sysctl_regs[ps2.tp700_sysctl_index] = val;
+}
+
+static uint8_t
+thinkpad_700_sm_read(uint16_t port, UNUSED(void *priv))
+{
+    switch (port) {
+        case 0x00b0:
+            return ps2.tp700_sm_index;
+        case 0x00b1:
+            return ps2.tp700_sm_regs[ps2.tp700_sm_index];
+        case 0x00b2:
+            return ps2.tp700_sm_status;
+        default:
+            return 0xff;
+    }
+}
+
+/*
+ * The 9552 system-management ASIC is not just an indexed register file.
+ * Register 3 is an eight-byte command FIFO: firmware selects command 03h,
+ * writes the four-byte header, selects the actual service (71h for the
+ * parameter service), and writes the four-byte payload.  Completion is
+ * returned in register 4 and result data in registers 8..0Bh.
+ *
+ * The system-management firmware accepts A0h as the normal completion code
+ * for service 71h.  Keeping the parameter store in the emulated controller
+ * also makes a set followed by a get behave like the physical device instead
+ * of merely forcing POST to continue.
+ */
+static void
+thinkpad_700_sm_execute_packet(void)
+{
+    uint16_t parameter;
+    uint16_t value;
+
+    switch (ps2.tp700_sm_command) {
+        case 0x71:
+            parameter = ((uint16_t) ps2.tp700_sm_packet[2] << 8) |
+                        ps2.tp700_sm_packet[1];
+
+            switch (ps2.tp700_sm_packet[0]) {
+                case 0x00: /* Read a system-management parameter. */
+                    value = (parameter < 0x200) ?
+                            ps2.tp700_sm_parameters[parameter] : 0;
+                    break;
+
+                case 0x02: /* Write a system-management parameter. */
+                    value = ((uint16_t) ps2.tp700_sm_packet[5] << 8) |
+                            ps2.tp700_sm_packet[4];
+                    if (parameter < 0x200)
+                        ps2.tp700_sm_parameters[parameter] = value;
+                    break;
+
+                default:
+                    value = 0;
+                    break;
+            }
+
+            ps2.tp700_sm_regs[0x04] = 0xa0;
+            ps2.tp700_sm_regs[0x08] = value & 0xff;
+            ps2.tp700_sm_regs[0x09] = value >> 8;
+            ps2.tp700_sm_regs[0x0a] = 0x00;
+            ps2.tp700_sm_regs[0x0b] = 0x00;
+            break;
+
+        default:
+            /* Unknown services complete without transport failure.  The
+               service-specific response remains zero for firmware to test. */
+            ps2.tp700_sm_regs[0x04] = 0x00;
+            ps2.tp700_sm_regs[0x08] = 0x00;
+            ps2.tp700_sm_regs[0x09] = 0x00;
+            ps2.tp700_sm_regs[0x0a] = 0x00;
+            ps2.tp700_sm_regs[0x0b] = 0x00;
+            break;
+    }
+}
+
+static void
+thinkpad_700_sm_write(uint16_t port, uint8_t val, UNUSED(void *priv))
+{
+    switch (port) {
+        case 0x00b0:
+            ps2.tp700_sm_index = val;
+            break;
+        case 0x00b1:
+            ps2.tp700_sm_regs[ps2.tp700_sm_index] = val;
+            if (ps2.tp700_sm_index == 0x02) {
+                if (val == 0x03) {
+                    ps2.tp700_sm_packet_pos = 0;
+                    memset(ps2.tp700_sm_packet, 0,
+                           sizeof(ps2.tp700_sm_packet));
+                } else {
+                    ps2.tp700_sm_command = val;
+                }
+            } else if (ps2.tp700_sm_index == 0x03) {
+                if (ps2.tp700_sm_packet_pos < sizeof(ps2.tp700_sm_packet))
+                    ps2.tp700_sm_packet[ps2.tp700_sm_packet_pos++] = val;
+                if (ps2.tp700_sm_packet_pos == sizeof(ps2.tp700_sm_packet))
+                    thinkpad_700_sm_execute_packet();
+            }
+            break;
+        case 0x00b2:
+            ps2.tp700_sm_status = val;
+            break;
+        default:
+            break;
+    }
+}
+
+static uint8_t
+thinkpad_700_ss_read(uint16_t port, UNUSED(void *priv))
+{
+    uint8_t ret;
+
+    /* 79h is a write-only command register and reads as ready status. */
+    if (port == 0x0079) {
+        ret = 0x00;
+        return ret;
+    }
+
+    /* With control bit 3 set, 7Bh exposes command status, not data. */
+    if ((port == 0x007b) && (ps2.tp700_ss_regs[4] & 0x08)) {
+        ret = 0x00;
+        return ret;
+    }
+
+    ret = ps2.tp700_ss_regs[port - 0x0078];
+    return ret;
+}
+
+static void
+thinkpad_700_ss_write(uint16_t port, uint8_t val, UNUSED(void *priv))
+{
+    if (port == 0x0079) {
+        ps2.tp700_ss_command = val;
+        return;
+    }
+
+    if ((port == 0x007c) && (val & 0x80)) {
+        const uint8_t index = ps2.tp700_ss_command & 0x3f;
+
+        if (ps2.tp700_ss_command & 0x80) {
+            ps2.tp700_ss_regs[2] = ps2.tp700_ss_words[index] >> 8;
+            ps2.tp700_ss_regs[3] = ps2.tp700_ss_words[index] & 0xff;
+        } else if (ps2.tp700_ss_command & 0x40) {
+            ps2.tp700_ss_words[index] =
+                (ps2.tp700_ss_regs[2] << 8) | ps2.tp700_ss_regs[3];
+        }
+
+        /* Complete synchronously: busy/error clear and data-ready set. */
+        ps2.tp700_ss_regs[4] = (val & 0x1f) | 0x20;
+        return;
+    }
+
+    ps2.tp700_ss_regs[port - 0x0078] = val;
+}
 
 /*The model 70 type 3/4 BIOS performs cache testing. Since 86Box doesn't have any
   proper cache emulation, it's faked a bit here.
@@ -211,6 +474,16 @@ void
 ps2_cache_clean(void)
 {
     memset(ps2_cache_valid, 0, sizeof(ps2_cache_valid));
+
+    /*
+     * A PS/2 DMA bus-master write asserts HOLD.  On IBM's 486SLC systems the
+     * processor is configured to flush its internal cache when ownership of
+     * the bus changes, because the SLC has no per-line external snooping.
+     * Keep the CPU's tag model coherent with the existing planar-cache
+     * invalidation.  Without this, the 9552 POST sees a false hit after its
+     * DMA coherency test and records 12902.
+     */
+    cpu_ibm_slc_cache_invalidate();
 }
 
 static uint8_t
@@ -525,6 +798,42 @@ model_50_write(uint16_t port, uint8_t val)
         default:
             break;
     }
+}
+
+/*
+ * On the 9552, planar POS byte 1 is fixed at BFh, but port 103h has a
+ * second function while system setup port 94h is 7Fh: bit 0 selects one of
+ * two memory-presence rows and the remaining bits report the optional IC
+ * DRAM-card connectors.  Treating it as writable POS storage returned
+ * BFh/BEh, neither of which is a valid 9552 memory signature.  The 4 MiB
+ * base planar is reported elsewhere; with both optional connectors empty,
+ * both selected rows read FFh.  At the supported 16 MiB maximum, the
+ * machine has 12 MiB of IC DRAM expansion (one 4 MiB and one 8 MiB card).
+ * The 9552 presence table encodes that two-card topology as 94h/84h.  Both
+ * values are among the signatures accepted by the 39G9996 ROM; returning
+ * BFh/BEh or FEh instead describes an unsupported module and raises 00225.
+ */
+static uint8_t
+thinkpad_700_planar_read(uint16_t port)
+{
+    if ((port == 0x0103) && (ps2.setup == 0x7f)) {
+        if (mem_size == 16384)
+            return ps2.tp700_mem_presence_select ? 0x94 : 0x84;
+        return 0xff;
+    }
+
+    return model_50_read(port);
+}
+
+static void
+thinkpad_700_planar_write(uint16_t port, uint8_t val)
+{
+    if ((port == 0x0103) && (ps2.setup == 0x7f)) {
+        ps2.tp700_mem_presence_select = val & 1;
+        return;
+    }
+
+    model_50_write(port, val);
 }
 
 static void
@@ -1187,9 +1496,57 @@ ps2_mca_board_model_50_init(void)
     ps2.option[1] |= 0x02;
 
     if (mem_size > 2048) {
-        /* Only 2 MB supported on planar, create a memory expansion card for the rest */
+        /*
+         * Keep the Model 50 memory controller active for now: the 9552 ROM
+         * uses its POS-programmed aperture during POST.  The ThinkPad 700
+         * Reference Diskette will be taught that FFFCh is onboard memory so
+         * it no longer treats this implementation detail as a missing card.
+         */
         ps2_mca_mem_fffc_init(2);
     }
+
+    if (gfxcard[0] == VID_INTERNAL)
+        device_add(&ps1vga_mca_device);
+}
+
+/*
+ * The ThinkPad 700 is not a portable Model 50.  In particular, all of its
+ * standard 4 MB is base-planar memory.  Reusing the Model 50 initialiser used
+ * to expose only 2 MB on the planar and synthesize the other 2 MB as an FFFC
+ * MCA expansion card.  The 9552 POST quite correctly reported that topology
+ * as a changed memory configuration (00164) and, before the card was enabled,
+ * as a memory-size failure (00201).
+ *
+ * PF1EE.ADF describes the 9552 planar as a two-slot system and gives the
+ * fixed POS bits below.  Keep the complete configured RAM address space on
+ * the planar mapping, while port 103h reports the real 4+8 MiB optional-card
+ * topology used for the supported 16 MiB configuration.
+ */
+static void
+ps2_mca_board_thinkpad_700_init(void)
+{
+    ps2_mca_board_common_init();
+
+    /*
+     * The 9552 planar reserves the upper 192 KiB of the conventional 384 KiB
+     * adapter/firmware hole.  Only A0000h-CFFFFh is backed by relocatable
+     * planar DRAM; D0000h-FFFFFh is firmware/control storage.  Relocating the
+     * full 384 KiB makes POST count 3456 KiB above base memory (0D80h), while
+     * the machine configuration correctly records 3264 KiB (0CC0h).  That
+     * real topology mismatch is what raises 00164 on every cold start.
+     */
+    mem_remap_top(192);
+    mca_init(2);
+
+    ps2.planar_read  = thinkpad_700_planar_read;
+    ps2.planar_write = thinkpad_700_planar_write;
+
+    /* PF1EE.ADF fixed planar POS values (POS 2 through POS 5). */
+    ps2.option[0] = 0x03;
+    ps2.option[1] = 0xbf;
+    ps2.option[2] = 0x02;
+    ps2.option[3] = 0x10;
+    ps2.tp700_mem_presence_select = 1;
 
     if (gfxcard[0] == VID_INTERNAL)
         device_add(&ps1vga_mca_device);
@@ -1631,8 +1988,12 @@ machine_ps2_common_init(const machine_t *model)
 {
     machine_common_init(model);
 
-    if (fdc_current[0] == FDC_INTERNAL)
-        device_add(&fdc_ps2_mca_device);
+    if (fdc_current[0] == FDC_INTERNAL) {
+        const device_t *fdc_device = (model->device == &thinkpad_700_device)
+                                   ? &fdc_ps2_mca_powerdown_device
+                                   : &fdc_ps2_mca_device;
+        device_add(fdc_device);
+    }
 
     dma16_init();
     ps2_dma_init();
@@ -1702,6 +2063,301 @@ const device_t ps2_model_50_device = {
     .force_redraw  = NULL,
     .config        = ps2_model_50_config
 };
+
+/*
+ * The only currently preserved 39G9996 dump is the 700C/F1EC build.  IBM's
+ * monochrome 700 Reference Diskette supplies PF1EE.ADF and the ROM contains
+ * the same planar ID at three mirrored operands in each 128 KiB half.  The
+ * physical EPROM part number was shared; select the monochrome build for this
+ * machine by converting those operands in the loaded copy and repairing the
+ * two affected 64 KiB checksums.  The user's source dump remains untouched.
+ */
+static int
+thinkpad_700_select_monochrome_rom(void)
+{
+    static const uint32_t planar_id_offsets[] = {
+        0x1057b, 0x107f2, 0x11be1, 0x30378, 0x305ee, 0x31517
+    };
+    int converted = 0;
+
+    for (unsigned i = 0; i < sizeof(planar_id_offsets) / sizeof(planar_id_offsets[0]); i++) {
+        const uint32_t offset = planar_id_offsets[i];
+
+        if ((rom[offset] == 0xec) && (rom[offset + 1] == 0xf1)) {
+            rom[offset] = 0xee;
+            converted++;
+        } else if (!((rom[offset] == 0xee) && (rom[offset + 1] == 0xf1))) {
+            pclog("TP700 ROM: unexpected planar-ID operand at %05X: %02X%02X\n",
+                  offset, rom[offset], rom[offset + 1]);
+            return 0;
+        }
+    }
+
+    if (converted) {
+        if (converted != 6) {
+            pclog("TP700 ROM: mixed 700/700C planar-ID operands\n");
+            return 0;
+        }
+        if ((rom[0x1ffff] != 0x16) || (rom[0x3ffff] != 0x39)) {
+            pclog("TP700 ROM: unexpected 700C checksum bytes %02X/%02X\n",
+                  rom[0x1ffff], rom[0x3ffff]);
+            return 0;
+        }
+        rom[0x1ffff] = 0x10;
+        rom[0x3ffff] = 0x33;
+    }
+
+    for (unsigned bank = 0; bank < 4; bank++) {
+        uint8_t sum = 0;
+
+        for (unsigned i = 0; i < 0x10000; i++)
+            sum += rom[(bank << 16) + i];
+        if (sum) {
+            pclog("TP700 ROM: bank %u checksum failed (%02X)\n", bank, sum);
+            return 0;
+        }
+    }
+
+    pclog("TP700 ROM: selected checksum-correct monochrome F1EE build\n");
+    return 1;
+}
+
+static const device_config_t thinkpad_700_config[] = {
+    // clang-format off
+    {
+        .name           = "bios",
+        .description    = "BIOS Version",
+        .type           = CONFIG_BIOS,
+        .default_string = "ibmtp700_39g9996",
+        .default_int    = 0,
+        .file_filter    = NULL,
+        .spinner        = { 0 },
+        .selection      = { { 0 } },
+        .bios           = {
+            {
+                .name          = "IBM ThinkPad 700 39G9996",
+                .internal_name = "ibmtp700_39g9996",
+                .bios_type     = BIOS_NORMAL,
+                .files_no      = 1,
+                .local         = 0,
+                .size          = 262144,
+                .files         = { "roms/machines/ibmtp700/39G9996.bin", "" }
+            },
+            { .files_no = 0 }
+        }
+    },
+    { .name = "", .description = "", .type = CONFIG_END }
+    // clang-format on
+};
+
+const device_t thinkpad_700_device = {
+    .name          = "IBM ThinkPad 700 (9552)",
+    .internal_name = "ibmtp700",
+    .flags         = 0,
+    .local         = 0,
+    .init          = NULL,
+    .close         = NULL,
+    .reset         = NULL,
+    .available     = NULL,
+    .speed_changed = NULL,
+    .force_redraw  = NULL,
+    .config        = thinkpad_700_config
+};
+
+int
+machine_thinkpad_700_init(const machine_t *model)
+{
+    int         ret;
+    const char *fn;
+    uint16_t    vector;
+
+    if (!device_available(model->device))
+        return 0;
+
+    device_context(model->device);
+    fn  = device_get_bios_file(machine_get_device(machine), device_get_config_bios("bios"), 0);
+    ret = bios_load_linear(fn, 0x000c0000, 262144, 0);
+    device_context_restore();
+
+    pclog("TP700 INIT: BIOS=%s loaded=%d bios_only=%d\n", fn, ret, bios_only);
+
+    if (ret && !thinkpad_700_select_monochrome_rom())
+        return 0;
+
+    if (bios_only || !ret)
+        return ret;
+
+    machine_ps2_common_init(model);
+
+    /*
+     * The 486SLC exposes only the upper 128 KiB of the 9552 firmware at the
+     * top of its 24-bit address space.  The generic 256 KiB BIOS loader maps
+     * the complete image at FC0000h-FFFFFFh; that incorrectly hides an extra
+     * 128 KiB of installed RAM.  It is invisible with the factory 4 MiB but
+     * at the supported 16 MiB maximum POST then measures 3B00h KiB of
+     * extended RAM while Automatic Configuration records the correct 3B80h,
+     * causing 00164 after every restart.  Keep the complete low shadow at
+     * C0000h-FFFFFh, but expose only the reset/POST half at FE0000h-FFFFFFh.
+     */
+    mem_mapping_set_addr(&bios_high_mapping, 0x00fe0000, 0x00020000);
+    mem_mapping_set_exec(&bios_high_mapping, rom + 0x00020000);
+    mem_set_mem_state_both(0x00fc0000, 0x00020000,
+                           MEM_READ_INTERNAL | MEM_WRITE_INTERNAL);
+    mem_set_mem_state_both(0x00fe0000, 0x00020000,
+                           MEM_READ_ROMCS | MEM_WRITE_ROMCS);
+    flushmmucache();
+
+    /* The Model 50 auxiliary PIT output is wired to NMI; the 9552 is not. */
+    nmi_mask = 0;
+
+    /* The monochrome ThinkPad 700 planar is F1EE (F1EC is the 700C). */
+    ps2.planar_id = 0xf1ee;
+    ps2_mca_board_thinkpad_700_init();
+    device_add(&ps2_nvr_device);
+
+    /*
+     * The firmware uses the top of its ROM window as writable runtime
+     * storage (for example the control block at FA40:0660).  Use the 9552's
+     * distinct shadow store so the relocated A0000h-FFFFFh DRAM remains
+     * independently testable above 4 MiB.
+     */
+    memcpy(thinkpad_700_shadow_ram, rom, sizeof(thinkpad_700_shadow_ram));
+    mem_mapping_add(&thinkpad_700_shadow_mapping,
+                    0x000c0000, sizeof(thinkpad_700_shadow_ram),
+                    thinkpad_700_shadow_read,
+                    thinkpad_700_shadow_readw,
+                    thinkpad_700_shadow_readl,
+                    thinkpad_700_shadow_write,
+                    thinkpad_700_shadow_writew,
+                    thinkpad_700_shadow_writel,
+                    thinkpad_700_shadow_ram,
+                    MEM_MAPPING_INTERNAL, NULL);
+    pclog("TP700 SHADOW INIT: ROM[37800]=%02X %02X %02X %02X "
+          "SHADOW[37800]=%02X %02X %02X %02X\n",
+          rom[0x37800], rom[0x37801], rom[0x37802], rom[0x37803],
+          thinkpad_700_shadow_ram[0x37800], thinkpad_700_shadow_ram[0x37801],
+          thinkpad_700_shadow_ram[0x37802], thinkpad_700_shadow_ram[0x37803]);
+    mem_set_mem_state_both(0x000c0000, 0x00040000,
+                           MEM_READ_INTERNAL | MEM_WRITE_INTERNAL);
+    flushmmucache();
+
+    memset(ps2.tp700_sysctl_regs, 0, sizeof(ps2.tp700_sysctl_regs));
+    ps2.tp700_sysctl_index = 0;
+    io_sethandler(0x00e0, 0x0001,
+                  thinkpad_700_sysctl_read, NULL, NULL,
+                  thinkpad_700_sysctl_write, NULL, NULL, NULL);
+    io_sethandler(0x00e3, 0x0001,
+                  thinkpad_700_sysctl_read, NULL, NULL,
+                  thinkpad_700_sysctl_write, NULL, NULL, NULL);
+    io_sethandler(0x00e4, 0x0001,
+                  thinkpad_700_sysctl_read, NULL, NULL,
+                  thinkpad_700_sysctl_write, NULL, NULL, NULL);
+
+    memset(ps2.tp700_sm_regs, 0, sizeof(ps2.tp700_sm_regs));
+    memset(ps2.tp700_sm_packet, 0, sizeof(ps2.tp700_sm_packet));
+    memset(ps2.tp700_sm_parameters, 0, sizeof(ps2.tp700_sm_parameters));
+    ps2.tp700_sm_index  = 0;
+    ps2.tp700_sm_status = 0;
+    ps2.tp700_sm_command = 0;
+    ps2.tp700_sm_packet_pos = 0;
+    io_sethandler(0x00b0, 0x0003,
+                  thinkpad_700_sm_read, NULL, NULL,
+                  thinkpad_700_sm_write, NULL, NULL, NULL);
+
+    /*
+     * 39G9996 checks this planar block after its first successful disk read.
+     * Port 79h contains the serial-storage status (zero means present/ready),
+     * while 7Ch is its latched control register.  An unclaimed I/O port reads
+     * as FFh and makes the BIOS deliberately halt with POST error 0186.
+     */
+    memset(ps2.tp700_ss_regs, 0, sizeof(ps2.tp700_ss_regs));
+    memset(ps2.tp700_ss_words, 0, sizeof(ps2.tp700_ss_words));
+    /*
+     * The 9552 serial EEPROM is split into two CRC-protected VPD regions.
+     * A blank, factory-serviceable EEPROM is not all zeroes: word 7 protects
+     * words 8..40, and word 0 protects words 1..6 plus 41..63.  The IBM IML
+     * uses the CRC-16 routine at 0000:4293 with an FFFFh seed and expects a
+     * zero remainder when the stored checksum is appended.  Supplying the
+     * correct blank-region checksums models an unprogrammed board instead of
+     * a corrupt one; the Reference Diskette may then populate identification
+     * data through the normal EEPROM write protocol.
+     */
+    ps2.tp700_ss_words[0] = 0xc53e;
+    ps2.tp700_ss_words[7] = 0xd5b6;
+    /* Words 29h..30h are the 16-byte system-unit serial number.  The EEPROM
+       service presents each word low byte first. */
+    {
+        static const char tp700_serial[16] = "9552-700-0000001";
+
+        for (unsigned i = 0; i < 8; i++)
+            ps2.tp700_ss_words[0x29 + i] =
+                (uint8_t) tp700_serial[i * 2] |
+                ((uint16_t) (uint8_t) tp700_serial[i * 2 + 1] << 8);
+    }
+    ps2.tp700_ss_command = 0;
+    io_sethandler(0x0078, 0x0005,
+                  thinkpad_700_ss_read, NULL, NULL,
+                  thinkpad_700_ss_write, NULL, NULL, NULL);
+
+    /*
+     * The 9552 stage-1 ROM calls INT 16h while doing its very early keyboard
+     * setup, before the generic PS/2 path has populated the IVT.  Its hardware
+     * and standard INT 08h..1Fh entry table starts at F000:FEF3.  Populate
+     * those vectors from the ROM's own table rather than emulating any BIOS
+     * service here.  In particular, INT 0Eh is the diskette IRQ6 handler.
+     */
+    for (vector = 0x08; vector <= 0x1f; vector++) {
+        const uint32_t table = 0x3fef3 + ((vector - 0x08) << 1);
+        const uint16_t entry = rom[table] | (rom[table + 1] << 8);
+        const uint32_t ivt   = vector << 2;
+
+        ram[ivt]     = entry & 0xff;
+        ram[ivt + 1] = entry >> 8;
+        ram[ivt + 2] = 0x00;
+        ram[ivt + 3] = entry ? 0xf0 : 0x00;
+    }
+
+    /*
+     * The same ROM initialization routine installs the slave-PIC vectors
+     * 70h..77h from the offset table at F000:FF23.  The early 9552 path does
+     * not run that generic initializer before using INT 15h/AH=86h, whose
+     * RTC completion interrupt is IRQ8/vector 70h.  Without these entries
+     * the interrupt follows uninitialized low RAM and eventually executes
+     * zero-filled ROM space.  Vector 70h is F000:FF33 in 39G9996 and jumps
+     * to the BIOS RTC handler at F000:E98C.
+     */
+    for (vector = 0x70; vector <= 0x77; vector++) {
+        const uint32_t table = 0x3ff23 + ((vector - 0x70) << 1);
+        const uint16_t entry = rom[table] | (rom[table + 1] << 8);
+        const uint32_t ivt   = vector << 2;
+
+        ram[ivt]     = entry & 0xff;
+        ram[ivt + 1] = entry >> 8;
+        ram[ivt + 2] = 0x00;
+        ram[ivt + 3] = entry ? 0xf0 : 0x00;
+    }
+
+    /*
+     * The 9552 reset path consults the EBDA before its first POST checkpoint.
+     * With the Model 50 base, BDA 40:0Eh is otherwise still zero at that
+     * point, so the ROM's EBDA status update at offset 68h aliases IVT 1Ah
+     * and changes its entry from FE6Eh to FE6Fh.  Establish the ThinkPad's
+     * 1 KiB EBDA up front, as the real planar does, so those early accesses
+     * land in the intended control area.
+     */
+    memset(&ram[0x0009fc00], 0, 0x400);
+    ram[0x0009fc00]            = 1;
+    *(uint16_t *) &ram[0x040e] = 0x9fc0;
+    *(uint16_t *) &ram[0x0413] = 0x027f;
+
+    pclog("TP700 INIT: planar=%04X RAM=%dKB EBDA=9FC0 "
+          "reference disk may now be read\n",
+          ps2.planar_id, mem_size);
+
+    device_add_params(machine_get_kbc_device(machine), (void *) model->kbc_params);
+
+    return ret;
+}
 
 int
 machine_ps2_model_50_init(const machine_t *model)

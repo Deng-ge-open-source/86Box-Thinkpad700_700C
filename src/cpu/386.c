@@ -61,6 +61,9 @@ x386_log(const char *fmt, ...)
 #    define x386_log(fmt, ...)
 #endif
 
+static uint64_t tp700_trace_instructions = 0;
+static int      tp700_halt_traces = 0;
+
 #undef CPU_BLOCK_END
 #define CPU_BLOCK_END()
 
@@ -237,6 +240,11 @@ exec386_2386(int32_t cycs)
     cycles += cycs;
 
     while (cycles > 0) {
+        static uint16_t tp700_last_base = 0xffff;
+        static uint16_t tp700_last_ebda = 0xffff;
+        static uint8_t  tp700_last_f7801 = 0xff;
+        static unsigned tp700_int15_traces = 0;
+
         cycle_period = (timer_target - (uint64_t) tsc) + 1;
 
         x86_was_reset = 0;
@@ -253,6 +261,24 @@ exec386_2386(int32_t cycs)
             cpu_state.oldpc = cpu_state.pc;
             cpu_state.op32  = use32;
 
+#ifndef NDEBUG
+            if (!strcmp(machine_get_internal_name(), "ibmtp700")) {
+                const uint16_t base = *(uint16_t *) &ram[0x0413];
+                const uint16_t ebda = *(uint16_t *) &ram[0x040e];
+                const uint8_t  f7801 = ram[0xf7801];
+
+                if ((base != tp700_last_base) || (ebda != tp700_last_ebda) ||
+                    (f7801 != tp700_last_f7801)) {
+                    pclog("TP700 MEMSTATE: next=%04X:%08X base=%04X "
+                          "EBDA=%04X F7801=%02X\n",
+                          CS, cpu_state.pc, base, ebda, f7801);
+                    tp700_last_base  = base;
+                    tp700_last_ebda  = ebda;
+                    tp700_last_f7801 = f7801;
+                }
+            }
+#endif
+
 #ifndef USE_NEW_DYNAREC
             x86_was_reset = 0;
 #endif
@@ -261,6 +287,76 @@ exec386_2386(int32_t cycs)
             cpu_state.ssegs  = 0;
 
             fetchdat = fastreadl_fetch(cs + cpu_state.pc);
+            if ((tp700_hdd_boot_pending == 2) &&
+                !strcmp(machine_get_internal_name(), "ibmtp700") &&
+                (((cs + cpu_state.pc) == 0x000f29dd) ||
+                 ((cs + cpu_state.pc) == 0x00007c00))) {
+                pclog("TP700 BOOT HANDOFF: committing HDD MBR after "
+                      "ROM bootstrap read\n");
+                tp700_boot_hdd_post();
+                fetchdat = fastreadl_fetch(cs + cpu_state.pc);
+            }
+            if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+                ((cs + cpu_state.pc == 0x000fd0ed) ||
+                 (cs + cpu_state.pc == 0x000fd10e) ||
+                 (cs + cpu_state.pc == 0x000f1669))) {
+                pclog("TP700 MEMORY FLOW: phys=%08X CS:IP=%04X:%04X "
+                      "AX=%04X BX=%04X CX=%04X DX=%04X SI=%04X DI=%04X "
+                      "BP=%04X SS:SP=%04X:%04X stack=%04X %04X %04X %04X "
+                      "frame=%08X %08X %08X %08X\n",
+                      cs + cpu_state.pc, CS, (uint16_t) cpu_state.pc,
+                      AX, BX, CX, DX, SI, DI, BP, SS, SP,
+                      readmemw(ss, SP), readmemw(ss, (SP + 2) & 0xffff),
+                      readmemw(ss, (SP + 4) & 0xffff),
+                      readmemw(ss, (SP + 6) & 0xffff),
+                      readmeml(ss, BP), readmeml(ss, (BP + 2) & 0xffff),
+                      readmeml(ss, (BP + 6) & 0xffff),
+                      readmeml(ss, (BP + 8) & 0xffff));
+            }
+#ifndef NDEBUG
+            if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+                (CS == 0xf000) &&
+                ((cpu_state.pc == 0x6d02) || (cpu_state.pc == 0x6d14) ||
+                 (cpu_state.pc == 0x6987)) &&
+                (tp700_int15_traces++ < 80)) {
+                const uint32_t stack = ss + (ESP & 0xffff);
+
+                pclog("TP700 INT15 FRAME: at=%04X:%04X SS:SP=%04X:%04X "
+                      "AX=%04X FLAGS=%04X use32=%03X stack32=%d "
+                      "words=%04X %04X %04X %04X %04X %04X\n",
+                      CS, (uint16_t) cpu_state.pc, SS, (uint16_t) ESP,
+                      AX, cpu_state.flags, use32, stack32,
+                      *(uint16_t *) &ram[stack],
+                      *(uint16_t *) &ram[stack + 2],
+                      *(uint16_t *) &ram[stack + 4],
+                      *(uint16_t *) &ram[stack + 6],
+                      *(uint16_t *) &ram[stack + 8],
+                      *(uint16_t *) &ram[stack + 10]);
+            }
+            if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+                (CS == 0xf000) && (cpu_state.pc == 0xaf5f) &&
+                (tp700_halt_traces++ < 4)) {
+                const uint32_t state_addr = ds + (ESI & 0xffff) + 1;
+                const uint32_t stack      = ss + (ESP & 0xffff);
+
+                pclog("TP700 HALT: DS:SI=%04X:%04X state=%08X/%02X "
+                      "SS:SP=%04X:%04X stack=%08X top=%02X %02X %02X %02X\n",
+                      DS, ESI & 0xffff, state_addr, ram[state_addr],
+                      SS, ESP & 0xffff, stack,
+                      ram[stack], ram[stack + 1], ram[stack + 2], ram[stack + 3]);
+            }
+            ++tp700_trace_instructions;
+            if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+                ((tp700_trace_instructions <= 256) ||
+                 ((tp700_trace_instructions & 0x0000ffff) == 0))) {
+                pclog("TP700 TRACE: ins=%llu CS:IP=%04X:%08X phys=%08X op=%08X "
+                      "AX=%08X BX=%08X CX=%08X DX=%08X SI=%08X "
+                      "DS=%04X SS:SP=%04X:%08X\n",
+                      (unsigned long long) tp700_trace_instructions,
+                      CS, cpu_state.pc, cs + cpu_state.pc, fetchdat,
+                      EAX, EBX, ECX, EDX, ESI, DS, SS, ESP);
+            }
+#endif
             ol = opcode_length[fetchdat & 0xff];
             if ((ol == 3) && opcode_has_modrm[fetchdat & 0xff] && (((fetchdat >> 14) & 0x03) == 0x03))
                 ol = 2;

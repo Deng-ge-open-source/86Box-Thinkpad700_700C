@@ -176,6 +176,7 @@ int cpu_mem_prefetch_cycles;
 int cpu_rom_prefetch_cycles;
 int cpu_waitstates;
 int cpu_cache_int_enabled;
+int cpu_ibm_slc_cache_tracking;
 int cpu_cache_ext_enabled;
 int cpu_flush_pending;
 int cpu_old_paging;
@@ -264,6 +265,116 @@ double cpu_dmulti;
 double cpu_busspeed;
 
 msr_t msr;
+
+/*
+ * IBM's 486SLC has a 16 KiB, four-way set-associative, write-through
+ * internal cache with 16-byte lines.  Bit 11 (CRLD) of MSR 1000h is a
+ * hardware status bit: the processor sets it whenever a read reloads a
+ * line.  It is used by IBM POST (including the ThinkPad 700 POST), not just
+ * for performance accounting.  Treating the bit as ordinary MSR storage,
+ * as the old implementation did, makes the real cache diagnostic fail with
+ * 12902 even though all memory data are correct.
+ *
+ * We do not need to duplicate cached data because 86Box's RAM is already the
+ * architectural source of truth for this write-through cache.  Tags and LRU
+ * state are sufficient to reproduce CRLD and invalidation semantics.
+ */
+#define IBM_SLC_CACHE_SETS 256
+#define IBM_SLC_CACHE_WAYS 4
+
+static uint32_t ibm_slc_cache_tag[IBM_SLC_CACHE_SETS][IBM_SLC_CACHE_WAYS];
+static uint8_t  ibm_slc_cache_valid[IBM_SLC_CACHE_SETS][IBM_SLC_CACHE_WAYS];
+static uint8_t  ibm_slc_cache_next[IBM_SLC_CACHE_SETS];
+
+void
+cpu_ibm_slc_cache_invalidate(void)
+{
+    memset(ibm_slc_cache_valid, 0, sizeof(ibm_slc_cache_valid));
+    memset(ibm_slc_cache_next, 0, sizeof(ibm_slc_cache_next));
+    if (0 && !strcmp(machine_get_internal_name(), "ibmtp700"))
+        pclog("TP700 SLC CACHE: invalidate at %04X:%04X\n",
+              CS, (uint16_t) cpu_state.pc);
+}
+
+void
+cpu_ibm_slc_cache_read(uint32_t addr)
+{
+    static unsigned tp700_cache_traces;
+    static unsigned tp700_cache_calls;
+    uint32_t block;
+    uint32_t set;
+    uint32_t tag;
+    uint32_t way;
+    int      cacheable;
+
+    if ((cpu_s == NULL) || (cpu_s->cpu_type != CPU_IBM486SLC))
+        return;
+
+    if (0 && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+        (addr >= 0x0007c000) && (addr < 0x0007c040) &&
+        (CS == 0xf000) && ((uint16_t) cpu_state.pc >= 0x0f30) &&
+        ((uint16_t) cpu_state.pc <= 0x0f55))
+        pclog("TP700 SLC F1D READ: addr=%08X at=%04X POR=%08llX "
+              "CRCR=%016llX\n", addr, (uint16_t) cpu_state.pc,
+              (unsigned long long) msr.ibm_por,
+              (unsigned long long) msr.ibm_crcr);
+
+    if (0 && !strcmp(machine_get_internal_name(), "ibmtp700") && msr.ibm_crcr &&
+        (tp700_cache_calls++ < 64))
+        pclog("TP700 SLC CACHE CALL: addr=%08X POR=%08llX CRCR=%016llX\n",
+              addr, (unsigned long long) msr.ibm_por,
+              (unsigned long long) msr.ibm_crcr);
+
+    /*
+     * CE (POR bit 7) controls normal use of cached data, but it does not
+     * disable the SLC's diagnostic tag-load path.  IBM's 9552 POST first
+     * programs CRCR, leaves CE clear, and verifies that a cacheable read sets
+     * CRLD and that a second read of the same line does not.  Gating tag/CRLD
+     * activity on CE makes this genuine processor test fail as 12902.
+     */
+
+    /* MSR 1001h: bits 15:0 select cacheable 64 KiB blocks below 1 MiB;
+       bits 39:32 give the number of cacheable 64 KiB blocks above 1 MiB. */
+    if (addr < 0x100000)
+        cacheable = !!(msr.ibm_crcr & (1ULL << (addr >> 16)));
+    else
+        cacheable = ((addr - 0x100000) >> 16) < ((msr.ibm_crcr >> 32) & 0xff);
+
+    if (!cacheable)
+        return;
+
+    block = addr >> 4;
+    set   = block & (IBM_SLC_CACHE_SETS - 1);
+    tag   = block >> 8;
+
+    for (way = 0; way < IBM_SLC_CACHE_WAYS; way++) {
+        if (ibm_slc_cache_valid[set][way] &&
+            (ibm_slc_cache_tag[set][way] == tag)) {
+            /* A hit leaves CRLD unchanged. */
+            if (0 && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+                (tp700_cache_traces++ < 128))
+                pclog("TP700 SLC CACHE: hit addr=%08X POR=%08llX "
+                      "CRCR=%016llX\n", addr,
+                      (unsigned long long) msr.ibm_por,
+                      (unsigned long long) msr.ibm_crcr);
+            return;
+        }
+    }
+
+    way = ibm_slc_cache_next[set];
+    ibm_slc_cache_tag[set][way]   = tag;
+    ibm_slc_cache_valid[set][way] = 1;
+    ibm_slc_cache_next[set]       = (way + 1) & (IBM_SLC_CACHE_WAYS - 1);
+
+    /* CRLD is set by hardware and remains set until software clears it. */
+    msr.ibm_por |= 0x800;
+    if (0 && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+        (tp700_cache_traces++ < 128))
+        pclog("TP700 SLC CACHE: miss addr=%08X POR=%08llX "
+              "CRCR=%016llX\n", addr,
+              (unsigned long long) msr.ibm_por,
+              (unsigned long long) msr.ibm_crcr);
+}
 
 cyrix_t cyrix;
 
@@ -2607,6 +2718,8 @@ void
 cpu_ven_reset(void)
 {
     memset(&msr, 0, sizeof(msr));
+    cpu_ibm_slc_cache_tracking = 0;
+    cpu_ibm_slc_cache_invalidate();
 
     switch (cpu_s->cpu_type) {
         case CPU_WINCHIP:
@@ -2684,6 +2797,9 @@ cpu_RDMSR(void)
                 /* Processor Operation Register */
                 case 0x1000:
                     EAX = msr.ibm_por & ((cpu_s->cpu_type > CPU_IBM386SLC) ? 0xffeff : 0xfeff);
+                    if (0 && !strcmp(machine_get_internal_name(), "ibmtp700"))
+                        pclog("TP700 SLC RDMSR: POR=%08X cache=%d\n",
+                              EAX, cpu_cache_int_enabled);
                     break;
 
                 /* Cache Region Control Register */
@@ -3537,12 +3653,27 @@ cpu_WRMSR(void)
             switch (ECX) {
                 /* Processor Operation Register */
                 case 0x1000:
+                    if (0 && !strcmp(machine_get_internal_name(), "ibmtp700"))
+                        pclog("TP700 SLC WRMSR: POR old=%08llX new=%08X\n",
+                              (unsigned long long) msr.ibm_por, EAX);
                     msr.ibm_por           = EAX & ((cpu_s->cpu_type > CPU_IBM386SLC) ? 0xffeff : 0xfeff);
                     cpu_cache_int_enabled = (EAX & (1 << 7));
                     break;
                 /* Cache Region Control Register */
                 case 0x1001:
+                    if (0 && !strcmp(machine_get_internal_name(), "ibmtp700"))
+                        pclog("TP700 SLC WRMSR: CRCR old=%016llX new=%08X%08X\n",
+                              (unsigned long long) msr.ibm_crcr, EDX, EAX);
                     msr.ibm_crcr = EAX | ((uint64_t) (EDX & 0x0000ffff) << 32);
+                    /*
+                     * The 9552 POST selects only 64 KiB block 7 while it
+                     * walks the 486SLC's tag RAM and checks CRLD hit/miss
+                     * behaviour.  Keep tag simulation fully active for that
+                     * diagnostic.  Once firmware installs the normal
+                     * multi-region CRCR value, architectural RAM remains the
+                     * source of truth and per-read tag bookkeeping can stop.
+                     */
+                    cpu_ibm_slc_cache_tracking = (msr.ibm_crcr == 0x80);
                     break;
                 /* Processor Operation Register */
                 case 0x1002:

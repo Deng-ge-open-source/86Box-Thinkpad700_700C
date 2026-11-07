@@ -100,6 +100,9 @@ extern void mca_write(const uint16_t port, const uint8_t val);
  */
 extern uint8_t mca_feedb(void);
 
+extern void    mca_feedback_set(void);
+extern uint8_t mca_feedback_read(void);
+
 /**
  * @brief Returns the number of physical slots initialized on the bus.
  *

@@ -57,6 +57,85 @@ int inrecomp                = 0;
 int cpu_block_end           = 0;
 int cpu_end_block_after_ins = 0;
 
+static uint64_t tp700_exec_trace_instructions = 0;
+static int      tp700_halt_traces = 0;
+static int      tp700_ac5b_entries = 0;
+static unsigned tp700_int15_traces = 0;
+static unsigned tp700_wait_exit_events = 0;
+static unsigned tp700_wait_exit_budget = 0;
+static unsigned tp700_irq2_dispatches = 0;
+static unsigned tp700_dos_loop_trace = 0;
+static unsigned tp700_dos_irq_dispatches = 0;
+static unsigned tp700_spurious_irq_dispatches = 0;
+static int      tp700_boot_iml_seen = 0;
+static int      tp700_planar_iml_seen = 0;
+static int      tp700_boot_sector_entry_seen = 0;
+static int      tp700_dos_entry_seen = 0;
+static unsigned tp700_ram_entries = 0;
+static uint32_t tp700_previous_physical_pc = 0xffffffff;
+static int      tp700_final_int13_active = 0;
+static unsigned tp700_final_return_trace = 0;
+static int      tp700_final_trace_started = 0;
+static uint32_t tp700_previous_ivt1a = 0xffffffff;
+static unsigned tp700_command_events = 0;
+
+static uint32_t
+tp700_find_ram_signature(const uint8_t *signature, size_t signature_size)
+{
+    const uint32_t ram_bytes = mem_size << 10;
+
+    if ((ram == NULL) || (signature_size == 0) ||
+        (ram_bytes < signature_size))
+        return 0xffffffff;
+
+    for (uint32_t offset = 0;
+         offset <= ram_bytes - signature_size; offset++) {
+        if ((ram[offset] == signature[0]) &&
+            !memcmp(&ram[offset], signature, signature_size))
+            return offset;
+    }
+
+    return 0xffffffff;
+}
+
+static void
+tp700_check_iml_signatures(void)
+{
+    static const uint8_t boot_iml_signature[] = {
+        0x49, 0x4d, 0x4c, 0x0e, 0x1f, 0x8f, 0x06, 0x00,
+        0x02, 0x8f, 0x06, 0x02, 0x02, 0x8f, 0x06, 0xe5,
+        0x01, 0x8f, 0x06, 0xe7, 0x01, 0x8f, 0x06, 0xa6,
+        0x00, 0x8f, 0x06, 0xa8, 0x00, 0x8b, 0xec, 0x66
+    };
+    static const uint8_t planar_iml_signature[] = {
+        0x35, 0x39, 0x47, 0x33, 0x36, 0x35, 0x37, 0x20,
+        0x28, 0x43, 0x29, 0x20, 0x43, 0x4f, 0x50, 0x59,
+        0x52, 0x49, 0x47, 0x48, 0x54, 0x20, 0x49, 0x42,
+        0x4d, 0x20, 0x43, 0x4f, 0x52, 0x50, 0x4f, 0x52
+    };
+    uint32_t offset;
+
+    if (!tp700_boot_iml_seen) {
+        offset = tp700_find_ram_signature(boot_iml_signature,
+                                          sizeof(boot_iml_signature));
+        if (offset != 0xffffffff) {
+            tp700_boot_iml_seen = 1;
+            pclog("TP700 IML SUCCESS: $BOOT.IML loaded at physical %08X\n",
+                  offset);
+        }
+    }
+
+    if (!tp700_planar_iml_seen) {
+        offset = tp700_find_ram_signature(planar_iml_signature,
+                                          sizeof(planar_iml_signature));
+        if (offset != 0xffffffff) {
+            tp700_planar_iml_seen = 1;
+            pclog("TP700 IML SUCCESS: $0007000.IML loaded at physical %08X\n",
+                  offset);
+        }
+    }
+}
+
 #if defined(__aarch64__) || defined(_M_ARM64)
 /* ARM64-only epoch: monotonically advances on dirty-list transitions so
    per-block retry state can distinguish dense bursts from stale retries. */
@@ -645,6 +724,118 @@ exec386_dynarec_dyn(void)
             cpu_state.ssegs  = 0;
 
             fetchdat = fastreadl_fetch(cs + cpu_state.pc);
+            if ((tp700_hdd_boot_pending == 2) &&
+                (((cs + cpu_state.pc) == 0x000f29dd) ||
+                 ((cs + cpu_state.pc) == 0x00007c00)) &&
+                !strcmp(machine_get_internal_name(), "ibmtp700")) {
+                pclog("TP700 BOOT HANDOFF: committing HDD MBR after "
+                      "ROM bootstrap read\n");
+                tp700_boot_hdd_post();
+                fetchdat = fastreadl_fetch(cs + cpu_state.pc);
+            }
+            if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+                ((cs + cpu_state.pc == 0x000fd0ed) ||
+                 (cs + cpu_state.pc == 0x000fd10e) ||
+                 (cs + cpu_state.pc == 0x000f1669))) {
+                pclog("TP700 MEMORY FLOW: phys=%08X CS:IP=%04X:%04X "
+                      "AX=%04X BX=%04X CX=%04X DX=%04X SI=%04X DI=%04X "
+                      "BP=%04X SS:SP=%04X:%04X stack=%04X %04X %04X %04X "
+                      "frame=%08X %08X %08X %08X\n",
+                      cs + cpu_state.pc, CS, (uint16_t) cpu_state.pc,
+                      AX, BX, CX, DX, SI, DI, BP, SS, SP,
+                      readmemw(ss, SP), readmemw(ss, (SP + 2) & 0xffff),
+                      readmemw(ss, (SP + 4) & 0xffff),
+                      readmemw(ss, (SP + 6) & 0xffff),
+                      readmeml(ss, BP), readmeml(ss, (BP + 2) & 0xffff),
+                      readmeml(ss, (BP + 6) & 0xffff),
+                      readmeml(ss, (BP + 8) & 0xffff));
+            }
+#ifndef NDEBUG
+            if (!strcmp(machine_get_internal_name(), "ibmtp700")) {
+                const uint32_t physical_pc = cs + cpu_state.pc;
+
+                if (!tp700_boot_sector_entry_seen &&
+                    (physical_pc == 0x00007c00)) {
+                    tp700_boot_sector_entry_seen = 1;
+                    pclog("TP700 BOOT SUCCESS: entered disk boot sector at "
+                          "%04X:%04X\n", CS, (uint16_t) cpu_state.pc);
+                }
+                if (!tp700_dos_entry_seen && (CS == 0x0070) &&
+                    ((uint16_t) cpu_state.pc == 0x0000)) {
+                    tp700_dos_entry_seen = 1;
+                    pclog("TP700 DOS SUCCESS: entered IBMBIO at 0070:0000\n");
+                }
+                if ((physical_pc < 0x000a0000) &&
+                    (tp700_previous_physical_pc >= 0x000c0000) &&
+                    (tp700_ram_entries++ < 64))
+                    pclog("TP700 RAM ENTRY: from physical %08X to "
+                          "%04X:%04X physical %08X\n",
+                          tp700_previous_physical_pc, CS,
+                          (uint16_t) cpu_state.pc, physical_pc);
+                tp700_previous_physical_pc = physical_pc;
+            }
+            if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+                (CS == 0xf000) && (cpu_state.pc == 0x4b97)) {
+                pclog("TP700 FATAL ENTRY: return=%04X SS:SP=%04X:%04X "
+                      "AX=%04X BX=%04X CX=%04X DX=%04X "
+                      "SI=%04X DI=%04X DS=%04X ES=%04X FLAGS=%04X\n",
+                      readmemw(ss, SP), SS, SP, AX, BX, CX, DX,
+                      SI, DI, DS, ES, cpu_state.flags);
+            }
+            if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+                (CS == 0x0246) && (cpu_state.pc >= 0x0060) &&
+                (cpu_state.pc <= 0x00a0) &&
+                (tp700_dos_loop_trace++ < 384))
+                pclog("TP700 DOS LOOP: CS:IP=%04X:%04X op=%08X "
+                      "AX=%04X BX=%04X CX=%04X DX=%04X SI=%04X DI=%04X "
+                      "DS=%04X ES=%04X SS:SP=%04X:%04X FLAGS=%04X "
+                      "IVT1=%04X:%04X\n",
+                      CS, (uint16_t) cpu_state.pc, fetchdat,
+                      AX, BX, CX, DX, SI, DI, DS, ES, SS, SP,
+                      cpu_state.flags, readmemw(0, 0x0006),
+                      readmemw(0, 0x0004));
+            if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+                !tp700_wait_exit_budget && (tp700_wait_exit_events < 3) &&
+                (CS == 0xf000) && (cpu_state.pc == 0x65ac) &&
+                (ram[ds + 0x003e] & 0x80) && ((ESP & 0xffff) < 0x03c0)) {
+                tp700_wait_exit_budget = 96;
+                tp700_wait_exit_events++;
+                pclog("TP700 WAIT EXIT BEGIN: event=%u\n", tp700_wait_exit_events);
+            }
+            if (tp700_wait_exit_budget) {
+                pclog("TP700 WAIT EXIT: event=%u left=%u CS:IP=%04X:%04X "
+                      "op=%08X SS:SP=%04X:%04X AX=%04X BX=%04X CX=%04X "
+                      "DX=%04X DS=%04X FLAGS=%04X BDA3E=%02X BDA41=%02X "
+                      "stack=%04X %04X %04X %04X\n",
+                      tp700_wait_exit_events, tp700_wait_exit_budget,
+                      CS, (uint16_t) cpu_state.pc, fetchdat,
+                      SS, (uint16_t) ESP, AX, BX, CX, DX, DS,
+                      cpu_state.flags, ram[ds + 0x003e], ram[ds + 0x0041],
+                      readmemw(ss, SP), readmemw(ss, (SP + 2) & 0xffff),
+                      readmemw(ss, (SP + 4) & 0xffff),
+                      readmemw(ss, (SP + 6) & 0xffff));
+                tp700_wait_exit_budget--;
+            }
+            if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+                (CS == 0xf000) &&
+                ((cpu_state.pc == 0x6d02) || (cpu_state.pc == 0x6d14) ||
+                 (cpu_state.pc == 0x6987)) &&
+                (tp700_int15_traces++ < 120)) {
+                const uint32_t stack = ss + (ESP & 0xffff);
+
+                pclog("TP700 INT15 FRAME: at=%04X:%04X SS:SP=%04X:%04X "
+                      "AX=%04X FLAGS=%04X use32=%03X stack32=%d "
+                      "words=%04X %04X %04X %04X %04X %04X\n",
+                      CS, (uint16_t) cpu_state.pc, SS, (uint16_t) ESP,
+                      AX, cpu_state.flags, use32, stack32,
+                      *(uint16_t *) &ram[stack],
+                      *(uint16_t *) &ram[stack + 2],
+                      *(uint16_t *) &ram[stack + 4],
+                      *(uint16_t *) &ram[stack + 6],
+                      *(uint16_t *) &ram[stack + 8],
+                      *(uint16_t *) &ram[stack + 10]);
+            }
+#endif
 #    ifdef ENABLE_386_DYNAREC_LOG
             if (in_smm)
                 x386_dynarec_log("[%04X:%08X] fetchdat = %08X\n", CS, cpu_state.pc, fetchdat);
@@ -827,6 +1018,12 @@ exec386_dynarec_dyn(void)
 void
 exec386_dynarec(int32_t cycs)
 {
+    static uint64_t tp700_dynarec_slices = 0;
+    static uint16_t tp700_prev_cs = 0xffff;
+    static uint32_t tp700_prev_pc = 0xffffffff;
+    static int      tp700_low_transitions = 0;
+    static int      tp700_bad_transitions = 0;
+    static int      tp700_e000_traces = 0;
     int      vector;
     int      tempi;
     int32_t  cycdiff;
@@ -834,6 +1031,52 @@ exec386_dynarec(int32_t cycs)
     int32_t  oldcyc2;
     uint64_t oldtsc;
     uint64_t delta;
+
+    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+        (CS == 0) && (tp700_prev_cs != 0) && (tp700_low_transitions++ < 32))
+        pclog("TP700 LOWRAM: from %04X:%08X to %04X:%08X "
+              "bytes20=%02X %02X %02X %02X %02X %02X %02X %02X\n",
+              tp700_prev_cs, tp700_prev_pc, CS, cpu_state.pc,
+              ram[0x20], ram[0x21], ram[0x22], ram[0x23],
+              ram[0x24], ram[0x25], ram[0x26], ram[0x27]);
+
+    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+        ((tp700_prev_cs == 0xf000) || (tp700_prev_cs == 0xe000)) &&
+        (CS != 0xf000) && (CS != 0xe000) && (CS != 0x0040) &&
+        (tp700_bad_transitions++ < 32)) {
+        const uint32_t stack = ss + (ESP & 0xffff);
+
+        pclog("TP700 TRANSITION: from %04X:%08X to %04X:%08X "
+              "SS:SP=%04X:%04X stack=%08X top=%02X %02X %02X %02X\n",
+              tp700_prev_cs, tp700_prev_pc, CS, cpu_state.pc,
+              SS, ESP & 0xffff, stack,
+              ram[stack], ram[stack + 1], ram[stack + 2], ram[stack + 3]);
+    }
+
+    tp700_prev_cs = CS;
+    tp700_prev_pc = cpu_state.pc;
+
+    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+        (CS == 0xe000) && (cpu_state.pc >= 0x7000) &&
+        (tp700_e000_traces++ < 1024)) {
+        const uint32_t stack = ss + (ESP & 0xffff);
+        pclog("TP700 E000: %04X:%08X SS:SP=%04X:%04X "
+              "stack=%08X top=%02X %02X %02X %02X\n",
+              CS, cpu_state.pc, SS, ESP & 0xffff, stack,
+              ram[stack], ram[stack + 1], ram[stack + 2], ram[stack + 3]);
+    }
+
+    /* Keep the slice counter for the one-shot IML detector, but do not write
+       a diagnostic line every 256 slices.  That trace was useful while the
+       ROM hand-off was being implemented, but it causes visible mouse and
+       menu stutter in Windows 3.x by synchronously growing the log forever. */
+    if (!strcmp(machine_get_internal_name(), "ibmtp700"))
+        ++tp700_dynarec_slices;
+
+    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+        ((tp700_dynarec_slices & 0xff) == 0) &&
+        (!tp700_boot_iml_seen || !tp700_planar_iml_seen))
+        tp700_check_iml_signatures();
 
     int32_t cyc_period = cycs / (force_10ms ? 2000 : 200); /*5us*/
 
@@ -924,6 +1167,31 @@ exec386_dynarec(int32_t cycs)
             } else if ((cpu_state.flags & I_FLAG) && pic.int_pending) {
                 vector = picinterrupt();
                 if (vector != -1) {
+                    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+                        (vector == 0x0f) &&
+                        (tp700_spurious_irq_dispatches++ < 128))
+                        pclog("TP700 IRQ7/SPURIOUS: from=%04X:%04X "
+                              "master=%02X/%02X/%02X pending=%u int=%02X "
+                              "slave=%02X/%02X/%02X pending=%u\n",
+                              CS, (uint16_t) cpu_state.pc,
+                              pic.irr, pic.isr, pic.imr,
+                              pic.int_pending, pic.interrupt,
+                              pic2.irr, pic2.isr, pic2.imr,
+                              pic2.int_pending);
+                    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+                        (vector == 0x0a)) {
+                        const unsigned trace_index = tp700_irq2_dispatches++;
+
+                        if ((trace_index < 64) ||
+                            ((trace_index & 0xffff) == 0))
+                            pclog("TP700 IRQ2 DISPATCH: index=%u from=%04X:%04X "
+                                  "master=%02X/%02X/%02X "
+                                  "slave=%02X/%02X/%02X pending=%u/%u\n",
+                                  trace_index, CS, (uint16_t) cpu_state.pc,
+                                  pic.irr, pic.isr, pic.imr,
+                                  pic2.irr, pic2.isr, pic2.imr,
+                                  pic.int_pending, pic2.int_pending);
+                    }
 #    ifndef USE_NEW_DYNAREC
                     oldcs = CS;
 #    endif
@@ -1014,6 +1282,184 @@ exec386(int32_t cycs)
 #endif
 
             fetchdat = fastreadl_fetch(cs + cpu_state.pc);
+            if ((tp700_hdd_boot_pending == 2) &&
+                (((cs + cpu_state.pc) == 0x000f29dd) ||
+                 ((cs + cpu_state.pc) == 0x00007c00)) &&
+                !strcmp(machine_get_internal_name(), "ibmtp700")) {
+                pclog("TP700 BOOT HANDOFF: committing HDD MBR after "
+                      "ROM bootstrap read\n");
+                tp700_boot_hdd_post();
+                fetchdat = fastreadl_fetch(cs + cpu_state.pc);
+            }
+#ifndef NDEBUG
+            if (!strcmp(machine_get_internal_name(), "ibmtp700")) {
+                const uint32_t physical_pc = cs + cpu_state.pc;
+
+                if (!tp700_boot_sector_entry_seen &&
+                    (physical_pc == 0x00007c00)) {
+                    tp700_boot_sector_entry_seen = 1;
+                    pclog("TP700 BOOT SUCCESS: entered disk boot sector at "
+                          "%04X:%04X\n", CS, (uint16_t) cpu_state.pc);
+                }
+                if (!tp700_dos_entry_seen && (CS == 0x0070) &&
+                    ((uint16_t) cpu_state.pc == 0x0000)) {
+                    tp700_dos_entry_seen = 1;
+                    pclog("TP700 DOS SUCCESS: entered IBMBIO at 0070:0000\n");
+                }
+                if ((physical_pc < 0x000a0000) &&
+                    (tp700_previous_physical_pc >= 0x000c0000) &&
+                    (tp700_ram_entries++ < 64))
+                    pclog("TP700 RAM ENTRY: from physical %08X to "
+                          "%04X:%04X physical %08X\n",
+                          tp700_previous_physical_pc, CS,
+                          (uint16_t) cpu_state.pc, physical_pc);
+                tp700_previous_physical_pc = physical_pc;
+            }
+            if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+                (CS == 0x0246) && (cpu_state.pc >= 0x0060) &&
+                (cpu_state.pc <= 0x00a0) &&
+                (tp700_dos_loop_trace++ < 384))
+                pclog("TP700 DOS LOOP: CS:IP=%04X:%04X op=%08X "
+                      "AX=%04X BX=%04X CX=%04X DX=%04X SI=%04X DI=%04X "
+                      "DS=%04X ES=%04X SS:SP=%04X:%04X FLAGS=%04X "
+                      "IVT1=%04X:%04X\n",
+                      CS, (uint16_t) cpu_state.pc, fetchdat,
+                      AX, BX, CX, DX, SI, DI, DS, ES, SS, SP,
+                      cpu_state.flags, readmemw(0, 0x0006),
+                      readmemw(0, 0x0004));
+            if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+                !tp700_wait_exit_budget && (tp700_wait_exit_events < 3) &&
+                (CS == 0xf000) && (cpu_state.pc == 0x65ac) &&
+                (readmemb(ds, 0x003e) & 0x80) &&
+                ((ESP & 0xffff) < 0x03c0)) {
+                tp700_wait_exit_budget = 96;
+                tp700_wait_exit_events++;
+                pclog("TP700 WAIT EXIT REAL BEGIN: event=%u\n",
+                      tp700_wait_exit_events);
+            }
+            if (tp700_wait_exit_budget) {
+                pclog("TP700 WAIT EXIT REAL: event=%u left=%u CS:IP=%04X:%04X "
+                      "op=%08X SS:SP=%04X:%04X AX=%04X BX=%04X CX=%04X "
+                      "DX=%04X DS=%04X FLAGS=%04X DS3E=%02X DS41=%02X "
+                      "stack=%04X %04X %04X %04X\n",
+                      tp700_wait_exit_events, tp700_wait_exit_budget,
+                      CS, (uint16_t) cpu_state.pc, fetchdat,
+                      SS, (uint16_t) ESP, AX, BX, CX, DX, DS,
+                      cpu_state.flags, readmemb(ds, 0x003e),
+                      readmemb(ds, 0x0041),
+                      readmemw(ss, SP), readmemw(ss, (SP + 2) & 0xffff),
+                      readmemw(ss, (SP + 4) & 0xffff),
+                      readmemw(ss, (SP + 6) & 0xffff));
+                tp700_wait_exit_budget--;
+            }
+            if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+                (CS == 0xf000) && (cpu_state.pc == 0xac5b) &&
+                (tp700_ac5b_entries++ < 8)) {
+                const uint32_t stack = ss + (ESP & 0xffff);
+
+                pclog("TP700 AC5B ENTRY: SS:SP=%04X:%04X stack=%08X "
+                      "top=%02X %02X %02X %02X %02X %02X "
+                      "nmi=%d enable=%d mask=%02X state=%02X\n",
+                      SS, ESP & 0xffff, stack,
+                      ram[stack], ram[stack + 1], ram[stack + 2],
+                      ram[stack + 3], ram[stack + 4], ram[stack + 5],
+                      nmi, nmi_enable, nmi_mask,
+                      ram[readmemw(0, 0x040e) * 16 + 1]);
+            }
+            if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+                (CS == 0xf000) && (cpu_state.pc == 0xaf5f) &&
+                (tp700_halt_traces++ < 4)) {
+                const uint32_t state_addr = ds + (ESI & 0xffff) + 1;
+                const uint32_t stack      = ss + (ESP & 0xffff);
+
+                pclog("TP700 HALT: DS:SI=%04X:%04X state=%08X/%02X "
+                      "SS:SP=%04X:%04X stack=%08X top=%02X %02X %02X %02X "
+                      "IVT2=%02X%02X:%02X%02X BDA0E=%02X%02X\n",
+                      DS, ESI & 0xffff, state_addr, ram[state_addr],
+                      SS, ESP & 0xffff, stack,
+                      ram[stack], ram[stack + 1], ram[stack + 2], ram[stack + 3],
+                      ram[11], ram[10], ram[9], ram[8], ram[0x40f], ram[0x40e]);
+            }
+            ++tp700_exec_trace_instructions;
+            if (!strcmp(machine_get_internal_name(), "ibmtp700")) {
+                const uint32_t ivt1a = *(uint32_t *) &ram[0x0068];
+
+                if (ivt1a != tp700_previous_ivt1a) {
+                    pclog("TP700 IVT1A CHANGE: at=%04X:%04X old=%08X "
+                          "new=%04X:%04X\n",
+                          CS, (uint16_t) cpu_state.pc, tp700_previous_ivt1a,
+                          (uint16_t) (ivt1a >> 16), (uint16_t) ivt1a);
+                    tp700_previous_ivt1a = ivt1a;
+                }
+                if ((tp700_final_int13_active) && (CS >= 0x1000) &&
+                    (((uint16_t) cpu_state.pc == 0x4429) ||
+                     ((uint16_t) cpu_state.pc == 0x4434) ||
+                     ((uint16_t) cpu_state.pc == 0x443e) ||
+                     ((uint16_t) cpu_state.pc == 0x4441) ||
+                     ((uint16_t) cpu_state.pc == 0x4443) ||
+                     ((uint16_t) cpu_state.pc == 0x4446) ||
+                     ((uint16_t) cpu_state.pc == 0x444f) ||
+                     ((uint16_t) cpu_state.pc == 0x4454) ||
+                     ((uint16_t) cpu_state.pc == 0x5244) ||
+                     ((uint16_t) cpu_state.pc == 0x5277) ||
+                     ((uint16_t) cpu_state.pc == 0x5280) ||
+                     ((uint16_t) cpu_state.pc == 0x528a) ||
+                     ((uint16_t) cpu_state.pc == 0x528c) ||
+                     ((uint16_t) cpu_state.pc == 0x5290) ||
+                     ((uint16_t) cpu_state.pc == 0x52af) ||
+                     ((uint16_t) cpu_state.pc == 0x52c5) ||
+                     ((uint16_t) cpu_state.pc == 0x52c6) ||
+                     ((uint16_t) cpu_state.pc == 0x4ba7)) &&
+                    (tp700_command_events++ < 64)) {
+                    pclog("TP700 COMMAND CHECK: CS:IP=%04X:%04X AX=%04X "
+                          "BX=%04X CX=%04X DX=%04X BP=%04X FLAGS=%04X "
+                          "TAG=%02X%02X%02X%02X%02X%02X%02X%02X\n",
+                          CS, (uint16_t) cpu_state.pc, AX, BX, CX, DX, BP,
+                          cpu_state.flags,
+                          readmemb(ds, 0x430e), readmemb(ds, 0x430f),
+                          readmemb(ds, 0x4310), readmemb(ds, 0x4311),
+                          readmemb(ds, 0x4312), readmemb(ds, 0x4313),
+                          readmemb(ds, 0x4314), readmemb(ds, 0x4315));
+                }
+            }
+            if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+                (CS == 0x9f44) && (cpu_state.pc == 0x0420) &&
+                (AX == 0x0201) && (BX == 0x7c5a) && (CX == 0x0209))
+                tp700_final_int13_active = 1;
+            if (tp700_final_int13_active && !tp700_final_trace_started &&
+                (CS == 0x0070) && (cpu_state.pc == 0x18c3)) {
+                tp700_final_trace_started = 1;
+                tp700_final_return_trace = 2500;
+                pclog("TP700 INT15 C000 TRACE START: CS:IP=%04X:%04X "
+                      "AX=%04X BX=%04X ES=%04X SS:SP=%04X:%04X\n",
+                      CS, (uint16_t) cpu_state.pc, AX, BX, ES, SS, SP);
+            }
+            if (tp700_final_return_trace) {
+                pclog("TP700 FINAL RETURN TRACE: left=%u CS:IP=%04X:%04X "
+                      "op=%08X SS:SP=%04X:%04X top=%04X %04X %04X %04X "
+                      "AX=%04X BX=%04X CX=%04X DX=%04X DS=%04X ES=%04X "
+                      "FLAGS=%04X\n",
+                      tp700_final_return_trace--, CS,
+                      (uint16_t) cpu_state.pc, fetchdat, SS, SP,
+                      readmemw(ss, SP), readmemw(ss, (SP + 2) & 0xffff),
+                      readmemw(ss, (SP + 4) & 0xffff),
+                      readmemw(ss, (SP + 6) & 0xffff),
+                      AX, BX, CX, DX, DS, ES, cpu_state.flags);
+            }
+            if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+                ((tp700_exec_trace_instructions & 0x0000ffff) == 0) &&
+                (!tp700_boot_iml_seen || !tp700_planar_iml_seen))
+                tp700_check_iml_signatures();
+            if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+                ((tp700_exec_trace_instructions <= 2048) ||
+                 ((tp700_exec_trace_instructions & 0x0000ffff) == 0))) {
+                pclog("TP700 EXEC: ins=%llu CS:IP=%04X:%08X phys=%08X op=%08X "
+                      "AX=%08X BX=%08X CX=%08X DX=%08X SP=%08X\n",
+                      (unsigned long long) tp700_exec_trace_instructions,
+                      CS, cpu_state.pc, cs + cpu_state.pc, fetchdat,
+                      EAX, EBX, ECX, EDX, ESP);
+            }
+#endif
 
             if (!cpu_state.abrt) {
 #ifdef ENABLE_386_LOG
@@ -1132,6 +1578,45 @@ block_ended:
             } else if ((cpu_state.flags & I_FLAG) && pic.int_pending && !cpu_end_block_after_ins) {
                 vector = picinterrupt();
                 if (vector != -1) {
+                    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+                        (CS == 0x0246) && (cpu_state.pc >= 0x0060) &&
+                        (cpu_state.pc <= 0x00a0) &&
+                        (tp700_dos_irq_dispatches++ < 128))
+                        pclog("TP700 DOS IRQ: vector=%02X from=%04X:%04X "
+                              "target=%04X:%04X "
+                              "ivt1c=%04X:%04X "
+                              "FLAGS=%04X master=%02X/%02X/%02X "
+                              "slave=%02X/%02X/%02X\n",
+                              vector, CS, (uint16_t) cpu_state.pc,
+                              readmemw(0, (vector << 2) + idt.base + 2),
+                              readmemw(0, (vector << 2) + idt.base),
+                              readmemw(0, 0x0072), readmemw(0, 0x0070),
+                              cpu_state.flags, pic.irr, pic.isr, pic.imr,
+                              pic2.irr, pic2.isr, pic2.imr);
+                    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+                        (vector == 0x0a)) {
+                        const unsigned trace_index = tp700_irq2_dispatches++;
+
+                        if ((trace_index < 64) ||
+                            ((trace_index & 0xffff) == 0))
+                            pclog("TP700 IRQ2 DISPATCH: index=%u from=%04X:%04X "
+                                  "master=%02X/%02X/%02X "
+                                  "slave=%02X/%02X/%02X pending=%u/%u\n",
+                                  trace_index, CS, (uint16_t) cpu_state.pc,
+                                  pic.irr, pic.isr, pic.imr,
+                                  pic2.irr, pic2.isr, pic2.imr,
+                                  pic.int_pending, pic2.int_pending);
+                    }
+                    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+                        (vector >= 0x70) && (vector <= 0x77)) {
+                        const uint32_t ivt_addr = (vector << 2) + idt.base;
+
+                        pclog("TP700 SLAVE IRQ: vector=%02X from=%04X:%04X "
+                              "target=%04X:%04X SS:SP=%04X:%04X\n",
+                              vector, CS, cpu_state.pc,
+                              readmemw(0, ivt_addr + 2), readmemw(0, ivt_addr),
+                              SS, SP);
+                    }
                     flags_rebuild();
                     if (msw & 1)
                         pmodeint(vector, 0);

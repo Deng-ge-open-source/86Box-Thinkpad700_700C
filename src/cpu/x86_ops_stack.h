@@ -73,6 +73,20 @@ POP_L_OP(ESP)
 static int
 opPUSHA_w(UNUSED(uint32_t fetchdat))
 {
+    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+        (CS == 0xf000) && (cpu_state.oldpc == 0xac5f)) {
+        const uint32_t stack = ss + (ESP & 0xffff);
+
+        pclog("TP700 AC5F PUSHA: SS:SP=%04X:%04X "
+              "top=%02X %02X %02X %02X %02X %02X "
+              "BP=%04X nmi=%d enable=%d mask=%02X state=%02X\n",
+              SS, ESP & 0xffff,
+              ram[stack], ram[stack + 1], ram[stack + 2],
+              ram[stack + 3], ram[stack + 4], ram[stack + 5],
+              BP, nmi, nmi_enable, nmi_mask,
+              ram[readmemw(0, 0x040e) * 16 + 1]);
+    }
+
     if (stack32) {
         writememw(ss, ESP - 2, AX);
         writememw(ss, ESP - 4, CX);
@@ -416,6 +430,20 @@ opENTER_w(uint32_t fetchdat)
     int instr_cycles = 0;
 #endif
     uint16_t tempw;
+
+    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+        (CS == 0xf000) && (cpu_state.oldpc == 0xac5b)) {
+        const uint32_t stack = ss + (ESP & 0xffff);
+
+        pclog("TP700 AC5B ENTER: SS:SP=%04X:%04X "
+              "top=%02X %02X %02X %02X %02X %02X "
+              "nmi=%d enable=%d mask=%02X state=%02X\n",
+              SS, ESP & 0xffff,
+              ram[stack], ram[stack + 1], ram[stack + 2],
+              ram[stack + 3], ram[stack + 4], ram[stack + 5],
+              nmi, nmi_enable, nmi_mask,
+              ram[readmemw(0, 0x040e) * 16 + 1]);
+    }
 
     offset = getwordf();
     count  = (fetchdat >> 16) & 0xff;

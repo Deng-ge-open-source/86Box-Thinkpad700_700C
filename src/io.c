@@ -23,11 +23,16 @@
 #include <wchar.h>
 #define HAVE_STDARG_H
 #include <86box/86box.h>
+#include <86box/device.h>
 #include <86box/io.h>
+#include <86box/mem.h>
 #include <86box/timer.h>
+#include <86box/video.h>
+#include <86box/vid_svga.h>
 #include "cpu.h"
 #include "x86.h"
 #include <86box/m_amstrad.h>
+#include <86box/machine.h>
 #include <86box/pci.h>
 
 #define NPORTS 65536 /* PC/AT supports 64K ports */
@@ -57,6 +62,119 @@ typedef struct io_trap_s {
 uint8_t initialized = 0;
 io_t   *io[NPORTS];
 io_t   *io_last[NPORTS];
+
+static uint64_t tp700_io_events = 0;
+static uint64_t tp700_kbc_events = 0;
+
+/*
+ * The 9552 firmware begins its base-memory test at POST checkpoint 51h/52h
+ * and leaves the completed count visible through the rest of POST.  The
+ * desktop Model 50/70 BIOS writes its count into VGA text RAM;
+ * do the same at the machine boundary instead of painting a host-side SDL
+ * overlay.  Reference-disk mode changes and clears now naturally own the
+ * resulting pixels, so POST text cannot leak into a later screen.
+ */
+static int tp700_post_memory_active = 0;
+
+int
+tp700_post_memory_display_active(void)
+{
+    return tp700_post_memory_active;
+}
+
+void
+tp700_post_memory_display_finish(void)
+{
+    tp700_post_memory_active = 0;
+}
+
+static void
+tp700_post_video_init(void)
+{
+    static const uint8_t seq[5] = {
+        0x03, 0x00, 0x03, 0x00, 0x02
+    };
+    static const uint8_t crtc[25] = {
+        0x5f, 0x4f, 0x50, 0x82, 0x55, 0x81, 0xbf, 0x1f,
+        0x00, 0x4f, 0x0d, 0x0e, 0x00, 0x00, 0x00, 0x50,
+        0x9c, 0x0e, 0x8f, 0x28, 0x1f, 0x96, 0xb9, 0xa3,
+        0xff
+    };
+    static const uint8_t gdc[9] = {
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x0e, 0x00, 0xff
+    };
+    static const uint8_t attr[21] = {
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x14, 0x07,
+        0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f,
+        0x0c, 0x00, 0x0f, 0x08, 0x00
+    };
+    svga_t *svga = svga_get_pri();
+
+    if ((svga == NULL) || (svga->video_out == NULL))
+        return;
+
+    /*
+     * The 9552's WD90C26 LCD adapter exposes an 80x25 status screen before
+     * the protected-mode memory test.  The temporary Model-50 VGA base starts
+     * blank, so program the equivalent standard VGA text timing here.  This
+     * is guest video state: later BIOS/reference-disk mode sets replace it in
+     * the normal way.
+     */
+    svga->video_out(0x03c2, 0x67, svga->priv);
+    for (uint8_t i = 0; i < 5; i++) {
+        svga->video_out(0x03c4, i, svga->priv);
+        svga->video_out(0x03c5, seq[i], svga->priv);
+    }
+
+    svga->video_out(0x03d4, 0x11, svga->priv);
+    svga->video_out(0x03d5, crtc[0x11] & 0x7f, svga->priv);
+    for (uint8_t i = 0; i < 25; i++) {
+        svga->video_out(0x03d4, i, svga->priv);
+        svga->video_out(0x03d5, crtc[i], svga->priv);
+    }
+    for (uint8_t i = 0; i < 9; i++) {
+        svga->video_out(0x03ce, i, svga->priv);
+        svga->video_out(0x03cf, gdc[i], svga->priv);
+    }
+    for (uint8_t i = 0; i < 21; i++) {
+        (void) svga_in(0x03da, svga);
+        svga->video_out(0x03c0, i, svga->priv);
+        svga->video_out(0x03c0, attr[i], svga->priv);
+    }
+    (void) svga_in(0x03da, svga);
+    svga->video_out(0x03c0, 0x20, svga->priv);
+
+    /* Populate plane 2 with the same IBM 8x16 font used by normal VGA text. */
+    for (uint16_t ch = 0; ch < 256; ch++) {
+        for (uint8_t row = 0; row < 16; row++)
+            svga->vram[2 + (ch * 128) + (row << 2)] = fontdatm[ch][row];
+    }
+
+    svga->dac_mask   = 0xff;
+    svga->pallook[0] = 0x00000000;
+    svga->pallook[7] = 0x00c0c0c0;
+    svga->pallook[15] = 0x00ffffff;
+    svga->fullchange = changeframecount;
+    svga_recalctimings(svga);
+
+    /* Clear all 80x25 text cells before the first count/checkpoint. */
+    for (uint32_t cell = 0; cell < (80 * 25); cell++) {
+        mem_writeb_phys(0x000b8000 + (cell << 1), ' ');
+        mem_writeb_phys(0x000b8000 + (cell << 1) + 1, 0x07);
+    }
+
+    /* Match the BIOS data-area state of an 80x25 color-text mode.  Without
+       the 9552's WD90C26 video BIOS, the inherited base-machine values still
+       describe a 40-column screen and the ROM's native status text wraps. */
+    ram[0x0449]                = 0x03;
+    *(uint16_t *) &ram[0x044a] = 80;
+    *(uint16_t *) &ram[0x044c] = 0x1000;
+    memset(&ram[0x0450], 0, 16);
+    ram[0x0462]                = 0;
+    *(uint16_t *) &ram[0x0463] = 0x03d4;
+    ram[0x0465]                = 0x29;
+    ram[0x0466]                = 0;
+}
 
 #ifdef ENABLE_IO_LOG
 uint8_t io_do_log = ENABLE_IO_LOG;
@@ -392,6 +510,17 @@ inb(uint16_t port)
 
     io_log("[%04X:%08X] (%i, %i, %04i) in b(%04X) = %02X\n", CS, cpu_state.pc, in_smm, found, qfound, port, ret);
 
+    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+        ((tp700_io_events++ < 128) ||
+         (port == 0x0092) || (port == 0x0094) || (port == 0x0096) ||
+         ((port >= 0x00b0) && (port <= 0x00b2)) ||
+         (port == 0x00e0) || (port == 0x00e2) || (port == 0x00e4) ||
+         (((port == 0x0060) || (port == 0x0064)) &&
+          (tp700_kbc_events++ < 128)) ||
+         ((port >= 0x0100) && (port <= 0x0107))))
+        pclog("TP700 I/O: %04X:%08X INB  %04X -> %02X handled=%d\n",
+              CS, cpu_state.pc, port, ret, found);
+
     return ret;
 }
 
@@ -448,6 +577,88 @@ outb(uint16_t port, uint8_t val)
     }
 
     io_log("[%04X:%08X] (%i, %i, %04i) outb(%04X, %02X)\n", CS, cpu_state.pc, in_smm, found, qfound, port, val);
+
+    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+        ((tp700_io_events++ < 128) ||
+         (port == 0x0084) || (port == 0x008f) || (port == 0x0092) || (port == 0x0094) ||
+         (port == 0x0096) || (port == 0x00e0) || (port == 0x00e2) ||
+         (port == 0x00e4) ||
+         (((port == 0x0060) || (port == 0x0064)) &&
+          (tp700_kbc_events++ < 128)) ||
+         ((port >= 0x00b0) && (port <= 0x00b2)) ||
+         ((port >= 0x0100) && (port <= 0x0107)) ||
+         (port == 0x03bc) || (port == 0x0680)))
+        pclog("TP700 I/O: %04X:%08X OUTB %04X <- %02X handled=%d\n",
+              CS, cpu_state.pc, port, val, found);
+
+    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+        (port == 0x0680) && ((val == 0xb0) || (val == 0xb9))) {
+        const uint32_t save = ds + (ESI & 0xffff) + 0xb0;
+
+        pclog("TP700 STACKSAVE: checkpoint=%02X DS:SI=%04X:%04X "
+              "SS:SP=%04X:%04X AX=%04X FLAGS=%04X save=%08X "
+              "values=%02X%02X %02X%02X %02X%02X field39=%02X%02X\n",
+              val, DS, ESI & 0xffff, SS, ESP & 0xffff,
+              AX, cpu_state.flags, save,
+              ram[save + 1], ram[save], ram[save + 3], ram[save + 2],
+              ram[save + 5], ram[save + 4],
+              ram[ds + (ESI & 0xffff) + 0x3a],
+              ram[ds + (ESI & 0xffff) + 0x39]);
+    }
+
+    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+        (port == 0x0680)) {
+        /* A0h is the first 9552 power-on checkpoint.  Make the emulated LCD
+           text path available before the ROM prints either the CP prefix or
+           the memory count; initializing at 51h is already too late. */
+        if (val == 0xa0) {
+            tp700_post_video_init();
+            tp700_post_memory_active = 0;
+        }
+
+        if ((val == 0x51) && !tp700_post_memory_active) {
+            tp700_post_memory_active = 1;
+            pclog("TP700 CHECKPOINT51 STACK: SS:SP=%04X:%04X "
+                  "%04X %04X %04X %04X %04X %04X %04X %04X "
+                  "AX=%04X BX=%04X CX=%04X DX=%04X SI=%04X DI=%04X BP=%04X\n",
+                  SS, SP,
+                  readmemwl(ss + SP),
+                  readmemwl(ss + ((SP + 2) & 0xffff)),
+                  readmemwl(ss + ((SP + 4) & 0xffff)),
+                  readmemwl(ss + ((SP + 6) & 0xffff)),
+                  readmemwl(ss + ((SP + 8) & 0xffff)),
+                  readmemwl(ss + ((SP + 10) & 0xffff)),
+                  readmemwl(ss + ((SP + 12) & 0xffff)),
+                  readmemwl(ss + ((SP + 14) & 0xffff)),
+                  AX, BX, CX, DX, SI, DI, BP);
+        }
+
+    }
+
+    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+        (port == 0x0680) && (val == 0xf0) &&
+        (*(uint16_t *) &ram[0x0413] > 0x0280)) {
+        /*
+         * The 9552 ROM normally creates the initial 1 KiB EBDA while leaving
+         * POST protected mode.  The Model 50 memory controller used as the
+         * current base does not provide that transition, so the test pattern
+         * (FFFFh) survives in the BDA and makes the later IML control block
+         * overwrite F000 ROM.  Recreate the architectural postcondition here:
+         * 639 KiB conventional memory plus a 1 KiB EBDA at 9FC0h.
+         */
+        memset(&ram[0x0009fc00], 0, 0x400);
+        ram[0x0009fc00]              = 1;
+        *(uint16_t *) &ram[0x040e]   = 0x9fc0;
+        *(uint16_t *) &ram[0x0413]   = 0x027f;
+        pclog("TP700 BDA FIXUP: base=027F EBDA=9FC0\n");
+    }
+
+    if (0 && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+        (port == 0x0680))
+        pclog("TP700 BDA: checkpoint=%02X base=%04X EBDA=%04X "
+              "F7801=%02X\n",
+              val, *(uint16_t *) &ram[0x0413],
+              *(uint16_t *) &ram[0x040e], ram[0xf7801]);
 
     return;
 }

@@ -1844,8 +1844,15 @@ page_remove_from_evict_list(page_t *page)
 void
 mem_write_ramb_page(uint32_t addr, uint8_t val, page_t *page)
 {
+    static int tp700_state_writes = 0;
+
     if (page == NULL)
         return;
+
+    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+        (addr == 0x000f7801) && (tp700_state_writes++ < 64))
+        pclog("TP700 STATE WRITE B: %04X:%08X %02X->%02X\n",
+              CS, cpu_state.oldpc, page->mem[addr & 0xfff], val);
 
 #    ifdef USE_DYNAREC
     if ((page->mem == NULL) || (page->mem == page_ff) || (val != page->mem[addr & 0xfff]) || codegen_in_recompile) {
@@ -1869,8 +1876,17 @@ mem_write_ramb_page(uint32_t addr, uint8_t val, page_t *page)
 void
 mem_write_ramw_page(uint32_t addr, uint16_t val, page_t *page)
 {
+    static int tp700_state_writes = 0;
+
     if (page == NULL)
         return;
+
+    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+        (addr <= 0x000f7801) && ((addr + 1) >= 0x000f7801) &&
+        (tp700_state_writes++ < 64))
+        pclog("TP700 STATE WRITE W: %04X:%08X addr=%08X %04X->%04X\n",
+              CS, cpu_state.oldpc, addr,
+              *(uint16_t *) &page->mem[addr & 0xfff], val);
 
 #    ifdef USE_DYNAREC
     if ((page->mem == NULL) || (page->mem == page_ff) || (val != *(uint16_t *) &page->mem[addr & 0xfff]) || codegen_in_recompile) {
@@ -1904,8 +1920,17 @@ mem_write_ramw_page(uint32_t addr, uint16_t val, page_t *page)
 void
 mem_write_raml_page(uint32_t addr, uint32_t val, page_t *page)
 {
+    static int tp700_state_writes = 0;
+
     if (page == NULL)
         return;
+
+    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+        (addr <= 0x000f7801) && ((addr + 3) >= 0x000f7801) &&
+        (tp700_state_writes++ < 64))
+        pclog("TP700 STATE WRITE L: %04X:%08X addr=%08X %08X->%08X\n",
+              CS, cpu_state.oldpc, addr,
+              *(uint32_t *) &page->mem[addr & 0xfff], val);
 
 #    ifdef USE_DYNAREC
     if ((page->mem == NULL) || (page->mem == page_ff) || (val != *(uint32_t *) &page->mem[addr & 0xfff]) || codegen_in_recompile) {
@@ -1992,12 +2017,19 @@ mem_write_raml_page(uint32_t addr, uint32_t val, page_t *page)
 void
 mem_write_ram(uint32_t addr, uint8_t val, UNUSED(void *priv))
 {
+    static int tp700_state_writes = 0;
+
 #ifdef ENABLE_MEM_LOG
     if ((addr >= 0xa0000) && (addr <= 0xbffff))
         mem_log("Write B       %02X to   %08X\n", val, addr);
 #endif
     if (is_pcjr)
         pcjr_waitstates(NULL);
+
+    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+        (addr == 0x000f7801) && (tp700_state_writes++ < 64))
+        pclog("TP700 STATE MAP B: %04X:%08X %02X->%02X exec=%d\n",
+              CS, cpu_state.oldpc, ram[addr], val, cpu_use_exec);
 
     if (cpu_use_exec) {
         addwritelookup(mem_logical_addr, addr);
@@ -2009,10 +2041,18 @@ mem_write_ram(uint32_t addr, uint8_t val, UNUSED(void *priv))
 void
 mem_write_ramw(uint32_t addr, uint16_t val, UNUSED(void *priv))
 {
+    static int tp700_state_writes = 0;
+
 #ifdef ENABLE_MEM_LOG
     if ((addr >= 0xa0000) && (addr <= 0xbffff))
         mem_log("Write W     %04X to   %08X\n", val, addr);
 #endif
+    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+        (addr <= 0x000f7801) && ((addr + 1) >= 0x000f7801) &&
+        (tp700_state_writes++ < 64))
+        pclog("TP700 STATE MAP W: %04X:%08X addr=%08X %04X->%04X exec=%d\n",
+              CS, cpu_state.oldpc, addr, *(uint16_t *) &ram[addr], val,
+              cpu_use_exec);
     if (cpu_use_exec) {
         addwritelookup(mem_logical_addr, addr);
         mem_write_ramw_page(addr, val, &pages[addr >> 12]);
@@ -2023,10 +2063,18 @@ mem_write_ramw(uint32_t addr, uint16_t val, UNUSED(void *priv))
 void
 mem_write_raml(uint32_t addr, uint32_t val, UNUSED(void *priv))
 {
+    static int tp700_state_writes = 0;
+
 #ifdef ENABLE_MEM_LOG
     if ((addr >= 0xa0000) && (addr <= 0xbffff))
         mem_log("Write L %08X to   %08X\n", val, addr);
 #endif
+    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+        (addr <= 0x000f7801) && ((addr + 3) >= 0x000f7801) &&
+        (tp700_state_writes++ < 64))
+        pclog("TP700 STATE MAP L: %04X:%08X addr=%08X %08X->%08X exec=%d\n",
+              CS, cpu_state.oldpc, addr, *(uint32_t *) &ram[addr], val,
+              cpu_use_exec);
     if (cpu_use_exec) {
         addwritelookup(mem_logical_addr, addr);
         mem_write_raml_page(addr, val, &pages[addr >> 12]);

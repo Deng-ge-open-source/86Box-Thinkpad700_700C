@@ -26,6 +26,7 @@
 
 extern "C" {
 #include <86box/86box.h>
+#include <86box/machine.h>
 #include <86box/path.h>
 #include <86box/plat.h>
 #include <86box/video.h>
@@ -179,7 +180,22 @@ SoftwareRenderer::onPaint(QPaintDevice *device)
     painter.fillRect(0, 0, device->width(), device->height(), Qt::black);
 #endif
     painter.setCompositionMode(QPainter::CompositionMode_Plus);
-    painter.drawImage(destination, *images[cur_image], source);
+    QRect lcdDestination = destination;
+
+    /*
+     * The ThinkPad 700 reference programs use a 400-line VGA image, while
+     * the notebook's 640x480 STN panel centers that image vertically.  A
+     * generic PS/1 VGA stretches it to all 480 lines, making menu cards and
+     * fonts visibly taller than on the real 9552.  Reproduce the internal
+     * LCD's 400/480 mapping for this machine only.
+     */
+    if (!strcmp(machine_get_internal_name(), "ibmtp700")) {
+        const int lcdHeight = (destination.height() * 5) / 6;
+        lcdDestination.setTop(destination.top() + ((destination.height() - lcdHeight) / 2));
+        lcdDestination.setHeight(lcdHeight);
+    }
+
+    painter.drawImage(lcdDestination, *images[cur_image], source);
     painter.end();
 }
 

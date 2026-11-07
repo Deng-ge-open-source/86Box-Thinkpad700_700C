@@ -26,9 +26,10 @@
 #    define readmemb_n(s, a, b)     readmembl_no_mmut_2386((s) + (a), b)
 #    define readmemw_n(s, a, b)     readmemwl_no_mmut_2386((s) + (a), b)
 #    define readmeml_n(s, a, b)     readmemll_no_mmut_2386((s) + (a), b)
-#    define readmemb(s, a)          readmembl_2386((s) + (a))
-#    define readmemw(s, a)          readmemwl_2386((s) + (a))
-#    define readmeml(s, a)          readmemll_2386((s) + (a))
+#    define IBM_SLC_CACHE_READ(a)   (cpu_ibm_slc_cache_tracking ? cpu_ibm_slc_cache_read(a) : (void) 0)
+#    define readmemb(s, a)          (IBM_SLC_CACHE_READ((s) + (a)), readmembl_2386((s) + (a)))
+#    define readmemw(s, a)          (IBM_SLC_CACHE_READ((s) + (a)), readmemwl_2386((s) + (a)))
+#    define readmeml(s, a)          (IBM_SLC_CACHE_READ((s) + (a)), readmemll_2386((s) + (a)))
 #    define readmemq(s, a)          readmemql_2386((s) + (a))
 
 #    define writememb_n(s, a, b, v) writemembl_no_mmut_2386((s) + (a), b, v)
@@ -53,9 +54,10 @@
 #    define readmemb_n(s, a, b) ((readlookup2[(uint32_t) ((s) + (a)) >> 12] == (uintptr_t) LOOKUP_INV || (s) == 0xFFFFFFFF || (dr[7] & 0xFF)) ? readmembl_no_mmut((s) + (a), b) : *(uint8_t *) (readlookup2[(uint32_t) ((s) + (a)) >> 12] + (uintptr_t) ((s) + (a))))
 #    define readmemw_n(s, a, b) ((readlookup2[(uint32_t) ((s) + (a)) >> 12] == (uintptr_t) LOOKUP_INV || (s) == 0xFFFFFFFF || (dr[7] & 0xFF) || (((s) + (a)) & 1)) ? readmemwl_no_mmut((s) + (a), b) : *(uint16_t *) (readlookup2[(uint32_t) ((s) + (a)) >> 12] + (uint32_t) ((s) + (a))))
 #    define readmeml_n(s, a, b) ((readlookup2[(uint32_t) ((s) + (a)) >> 12] == (uintptr_t) LOOKUP_INV || (s) == 0xFFFFFFFF || (dr[7] & 0xFF) || (((s) + (a)) & 3)) ? readmemll_no_mmut((s) + (a), b) : *(uint32_t *) (readlookup2[(uint32_t) ((s) + (a)) >> 12] + (uint32_t) ((s) + (a))))
-#    define readmemb(s, a)      ((readlookup2[(uint32_t) ((s) + (a)) >> 12] == (uintptr_t) LOOKUP_INV || (s) == 0xFFFFFFFF || (dr[7] & 0xFF)) ? readmembl((s) + (a)) : *(uint8_t *) (readlookup2[(uint32_t) ((s) + (a)) >> 12] + (uintptr_t) ((s) + (a))))
-#    define readmemw(s, a)      ((readlookup2[(uint32_t) ((s) + (a)) >> 12] == (uintptr_t) LOOKUP_INV || (s) == 0xFFFFFFFF || (dr[7] & 0xFF) || (((s) + (a)) & 1)) ? readmemwl((s) + (a)) : *(uint16_t *) (readlookup2[(uint32_t) ((s) + (a)) >> 12] + (uint32_t) ((s) + (a))))
-#    define readmeml(s, a)      ((readlookup2[(uint32_t) ((s) + (a)) >> 12] == (uintptr_t) LOOKUP_INV || (s) == 0xFFFFFFFF || (dr[7] & 0xFF) || (((s) + (a)) & 3)) ? readmemll((s) + (a)) : *(uint32_t *) (readlookup2[(uint32_t) ((s) + (a)) >> 12] + (uint32_t) ((s) + (a))))
+#    define IBM_SLC_CACHE_READ(a) (cpu_ibm_slc_cache_tracking ? cpu_ibm_slc_cache_read(a) : (void) 0)
+#    define readmemb(s, a)      (IBM_SLC_CACHE_READ((s) + (a)), ((readlookup2[(uint32_t) ((s) + (a)) >> 12] == (uintptr_t) LOOKUP_INV || (s) == 0xFFFFFFFF || (dr[7] & 0xFF)) ? readmembl((s) + (a)) : *(uint8_t *) (readlookup2[(uint32_t) ((s) + (a)) >> 12] + (uintptr_t) ((s) + (a)))))
+#    define readmemw(s, a)      (IBM_SLC_CACHE_READ((s) + (a)), ((readlookup2[(uint32_t) ((s) + (a)) >> 12] == (uintptr_t) LOOKUP_INV || (s) == 0xFFFFFFFF || (dr[7] & 0xFF) || (((s) + (a)) & 1)) ? readmemwl((s) + (a)) : *(uint16_t *) (readlookup2[(uint32_t) ((s) + (a)) >> 12] + (uint32_t) ((s) + (a)))))
+#    define readmeml(s, a)      (IBM_SLC_CACHE_READ((s) + (a)), ((readlookup2[(uint32_t) ((s) + (a)) >> 12] == (uintptr_t) LOOKUP_INV || (s) == 0xFFFFFFFF || (dr[7] & 0xFF) || (((s) + (a)) & 3)) ? readmemll((s) + (a)) : *(uint32_t *) (readlookup2[(uint32_t) ((s) + (a)) >> 12] + (uint32_t) ((s) + (a)))))
 #    define readmemq(s, a)      ((readlookup2[(uint32_t) ((s) + (a)) >> 12] == (uintptr_t) LOOKUP_INV || (s) == 0xFFFFFFFF || (dr[7] & 0xFF) || (((s) + (a)) & 7)) ? readmemql((s) + (a)) : *(uint64_t *) (readlookup2[(uint32_t) ((s) + (a)) >> 12] + (uintptr_t) ((s) + (a))))
 
 #    define writememb_n(s, a, b, v)                                                                                      \
@@ -126,12 +128,13 @@
         if (writelookup2[(uint32_t) ((s) + (a)) >> 12] == (uintptr_t) LOOKUP_INV || (s) == 0xFFFFFFFF || (((s) + (a)) & 3) || (dr[7] & 0xFF)) \
         do_mmutranslate((s) + (a), b, 4, 1)
 #else
-#    define readmemb_n(s, a, b) ((readlookup2[(uint32_t) ((s) + (a)) >> 12] == (uintptr_t) LOOKUP_INV || (s) == 0xFFFFFFFF) ? readmembl_no_mmut((s) + (a), b) : *(uint8_t *) (readlookup2[(uint32_t) ((s) + (a)) >> 12] + (uintptr_t) ((s) + (a))))
-#    define readmemw_n(s, a, b) ((readlookup2[(uint32_t) ((s) + (a)) >> 12] == (uintptr_t) LOOKUP_INV || (s) == 0xFFFFFFFF || (((s) + (a)) & 1)) ? readmemwl_no_mmut((s) + (a), b) : *(uint16_t *) (readlookup2[(uint32_t) ((s) + (a)) >> 12] + (uint32_t) ((s) + (a))))
-#    define readmeml_n(s, a, b) ((readlookup2[(uint32_t) ((s) + (a)) >> 12] == (uintptr_t) LOOKUP_INV || (s) == 0xFFFFFFFF || (((s) + (a)) & 3)) ? readmemll_no_mmut((s) + (a), b) : *(uint32_t *) (readlookup2[(uint32_t) ((s) + (a)) >> 12] + (uint32_t) ((s) + (a))))
-#    define readmemb(s, a)      ((readlookup2[(uint32_t) ((s) + (a)) >> 12] == (uintptr_t) LOOKUP_INV || (s) == 0xFFFFFFFF) ? readmembl((s) + (a)) : *(uint8_t *) (readlookup2[(uint32_t) ((s) + (a)) >> 12] + (uintptr_t) ((s) + (a))))
-#    define readmemw(s, a)      ((readlookup2[(uint32_t) ((s) + (a)) >> 12] == (uintptr_t) LOOKUP_INV || (s) == 0xFFFFFFFF || (((s) + (a)) & 1)) ? readmemwl((s) + (a)) : *(uint16_t *) (readlookup2[(uint32_t) ((s) + (a)) >> 12] + (uint32_t) ((s) + (a))))
-#    define readmeml(s, a)      ((readlookup2[(uint32_t) ((s) + (a)) >> 12] == (uintptr_t) LOOKUP_INV || (s) == 0xFFFFFFFF || (((s) + (a)) & 3)) ? readmemll((s) + (a)) : *(uint32_t *) (readlookup2[(uint32_t) ((s) + (a)) >> 12] + (uint32_t) ((s) + (a))))
+#    define IBM_SLC_CACHE_READ(a) (cpu_ibm_slc_cache_tracking ? cpu_ibm_slc_cache_read(a) : (void) 0)
+#    define readmemb_n(s, a, b) (IBM_SLC_CACHE_READ((s) + (a)), ((readlookup2[(uint32_t) ((s) + (a)) >> 12] == (uintptr_t) LOOKUP_INV || (s) == 0xFFFFFFFF) ? readmembl_no_mmut((s) + (a), b) : *(uint8_t *) (readlookup2[(uint32_t) ((s) + (a)) >> 12] + (uintptr_t) ((s) + (a)))))
+#    define readmemw_n(s, a, b) (IBM_SLC_CACHE_READ((s) + (a)), ((readlookup2[(uint32_t) ((s) + (a)) >> 12] == (uintptr_t) LOOKUP_INV || (s) == 0xFFFFFFFF || (((s) + (a)) & 1)) ? readmemwl_no_mmut((s) + (a), b) : *(uint16_t *) (readlookup2[(uint32_t) ((s) + (a)) >> 12] + (uint32_t) ((s) + (a)))))
+#    define readmeml_n(s, a, b) (IBM_SLC_CACHE_READ((s) + (a)), ((readlookup2[(uint32_t) ((s) + (a)) >> 12] == (uintptr_t) LOOKUP_INV || (s) == 0xFFFFFFFF || (((s) + (a)) & 3)) ? readmemll_no_mmut((s) + (a), b) : *(uint32_t *) (readlookup2[(uint32_t) ((s) + (a)) >> 12] + (uint32_t) ((s) + (a)))))
+#    define readmemb(s, a)      (IBM_SLC_CACHE_READ((s) + (a)), ((readlookup2[(uint32_t) ((s) + (a)) >> 12] == (uintptr_t) LOOKUP_INV || (s) == 0xFFFFFFFF) ? readmembl((s) + (a)) : *(uint8_t *) (readlookup2[(uint32_t) ((s) + (a)) >> 12] + (uintptr_t) ((s) + (a)))))
+#    define readmemw(s, a)      (IBM_SLC_CACHE_READ((s) + (a)), ((readlookup2[(uint32_t) ((s) + (a)) >> 12] == (uintptr_t) LOOKUP_INV || (s) == 0xFFFFFFFF || (((s) + (a)) & 1)) ? readmemwl((s) + (a)) : *(uint16_t *) (readlookup2[(uint32_t) ((s) + (a)) >> 12] + (uint32_t) ((s) + (a)))))
+#    define readmeml(s, a)      (IBM_SLC_CACHE_READ((s) + (a)), ((readlookup2[(uint32_t) ((s) + (a)) >> 12] == (uintptr_t) LOOKUP_INV || (s) == 0xFFFFFFFF || (((s) + (a)) & 3)) ? readmemll((s) + (a)) : *(uint32_t *) (readlookup2[(uint32_t) ((s) + (a)) >> 12] + (uint32_t) ((s) + (a)))))
 #    define readmemq(s, a)      ((readlookup2[(uint32_t) ((s) + (a)) >> 12] == (uintptr_t) LOOKUP_INV || (s) == 0xFFFFFFFF || (((s) + (a)) & 7)) ? readmemql((s) + (a)) : *(uint64_t *) (readlookup2[(uint32_t) ((s) + (a)) >> 12] + (uintptr_t) ((s) + (a))))
 
 #    define writememb_n(s, a, b, v)                                                                    \
@@ -717,8 +720,10 @@ geteab(void)
 {
     if (cpu_mod == 3)
         return (cpu_rm & 4) ? cpu_state.regs[cpu_rm & 3].b.h : cpu_state.regs[cpu_rm & 3].b.l;
-    if (eal_r)
+    if (eal_r) {
+        IBM_SLC_CACHE_READ(easeg + cpu_state.eaaddr);
         return *(uint8_t *) eal_r;
+    }
     return readmemb(easeg, cpu_state.eaaddr);
 }
 
@@ -727,8 +732,10 @@ geteaw(void)
 {
     if (cpu_mod == 3)
         return cpu_state.regs[cpu_rm].w;
-    if (eal_r)
+    if (eal_r) {
+        IBM_SLC_CACHE_READ(easeg + cpu_state.eaaddr);
         return *(uint16_t *) eal_r;
+    }
     return readmemw(easeg, cpu_state.eaaddr);
 }
 
@@ -737,8 +744,10 @@ geteal(void)
 {
     if (cpu_mod == 3)
         return cpu_state.regs[cpu_rm].l;
-    if (eal_r)
+    if (eal_r) {
+        IBM_SLC_CACHE_READ(easeg + cpu_state.eaaddr);
         return *eal_r;
+    }
     return readmeml(easeg, cpu_state.eaaddr);
 }
 
@@ -751,22 +760,28 @@ geteaq(void)
 static __inline uint8_t
 geteab_mem(void)
 {
-    if (eal_r)
+    if (eal_r) {
+        IBM_SLC_CACHE_READ(easeg + cpu_state.eaaddr);
         return *(uint8_t *) eal_r;
+    }
     return readmemb(easeg, cpu_state.eaaddr);
 }
 static __inline uint16_t
 geteaw_mem(void)
 {
-    if (eal_r)
+    if (eal_r) {
+        IBM_SLC_CACHE_READ(easeg + cpu_state.eaaddr);
         return *(uint16_t *) eal_r;
+    }
     return readmemw(easeg, cpu_state.eaaddr);
 }
 static __inline uint32_t
 geteal_mem(void)
 {
-    if (eal_r)
+    if (eal_r) {
+        IBM_SLC_CACHE_READ(easeg + cpu_state.eaaddr);
         return *eal_r;
+    }
     return readmeml(easeg, cpu_state.eaaddr);
 }
 

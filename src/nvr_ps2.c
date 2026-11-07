@@ -33,6 +33,7 @@
  *   USA.
  */
 #include <stdio.h>
+#include <inttypes.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
@@ -46,9 +47,14 @@
 #include <86box/nvr.h>
 #include <86box/nvr_ps2.h>
 #include <86box/rom.h>
+#include "cpu.h"
+#include "x86.h"
 
 typedef struct ps2_nvr_t {
     int addr;
+
+    uint64_t reads;
+    uint64_t writes;
 
     uint8_t *ram;
     int      size;
@@ -59,8 +65,8 @@ typedef struct ps2_nvr_t {
 static uint8_t
 ps2_nvr_read(uint16_t port, void *priv)
 {
-    const ps2_nvr_t *nvr = (ps2_nvr_t *) priv;
-    uint8_t          ret = 0xff;
+    ps2_nvr_t *nvr = (ps2_nvr_t *) priv;
+    uint8_t    ret = 0xff;
 
     switch (port) {
         case 0x74:
@@ -73,6 +79,25 @@ ps2_nvr_read(uint16_t port, void *priv)
 
         case 0x76:
             ret = nvr->ram[nvr->addr];
+            if (0 && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+                (nvr->addr == 0x0192)) {
+                pclog("TP700 NVR0192 READ: data=%02X at %04X:%08X "
+                      "SS:SP=%04X:%04X stack=%04X %04X %04X %04X "
+                      "%04X %04X %04X %04X\n",
+                      ret, CS, cpu_state.pc, SS, SP,
+                      readmemwl(ss + SP),
+                      readmemwl(ss + ((SP + 2) & 0xffff)),
+                      readmemwl(ss + ((SP + 4) & 0xffff)),
+                      readmemwl(ss + ((SP + 6) & 0xffff)),
+                      readmemwl(ss + ((SP + 8) & 0xffff)),
+                      readmemwl(ss + ((SP + 10) & 0xffff)),
+                      readmemwl(ss + ((SP + 12) & 0xffff)),
+                      readmemwl(ss + ((SP + 14) & 0xffff)));
+            }
+            if (0 && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+                ((nvr->reads++ & 0xff) == 0))
+                pclog("TP700 NVR: read=%" PRIu64 " addr=%04X data=%02X\n",
+                      nvr->reads, nvr->addr, ret);
             break;
 
         default:
@@ -98,6 +123,10 @@ ps2_nvr_write(uint16_t port, uint8_t val, void *priv)
 
         case 0x76:
             nvr->ram[nvr->addr] = val;
+            if (0 && !strcmp(machine_get_internal_name(), "ibmtp700"))
+                pclog("TP700 NVR: write=%" PRIu64 " addr=%04X data=%02X at %04X:%08X phys=%08X\n",
+                      ++nvr->writes, nvr->addr, val, CS, cpu_state.pc,
+                      cs + cpu_state.pc);
             break;
 
         default:

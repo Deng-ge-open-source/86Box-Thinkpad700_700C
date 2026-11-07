@@ -108,6 +108,12 @@ extern void     outw(uint16_t port, uint16_t val);
 extern uint32_t inl(uint16_t port);
 extern void     outl(uint16_t port, uint32_t val);
 
+/* True only while the ThinkPad 700 ROM is drawing its native POST memory
+   counter.  The panel mapper uses this to preserve the edge-to-edge POST
+   geometry until the floppy or fixed-disk bootstrap actually begins. */
+extern int tp700_post_memory_display_active(void);
+extern void tp700_post_memory_display_finish(void);
+
 extern void *io_trap_add(void (*func)(uint16_t size, uint16_t port, uint8_t write, uint8_t val, void *priv),
                          void *priv);
 extern void  io_trap_remap(void *handle, uint8_t enable, uint16_t port, uint16_t size);

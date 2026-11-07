@@ -226,6 +226,7 @@
 #include <time.h>
 #include <86box/86box.h>
 #include "cpu.h"
+#include "x86.h"
 #include <86box/machine.h>
 #include <86box/io.h>
 #include <86box/mem.h>
@@ -597,6 +598,39 @@ nvr_reg_write(uint16_t reg, uint8_t val, void *priv)
     uint8_t   old;
 
     old = nvr->regs[reg];
+    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+        (reg >= 0x0e)) {
+        pclog("TP700 CMOS WRITE: reg=%02X old=%02X new=%02X from=%04X:%08X\n",
+              reg, old, val, CS, cpu_state.pc);
+        if ((reg == 0x0e) && (val & 0x10))
+        {
+            pclog("TP700 CMOS 00164 STACK: SS:SP=%04X:%04X "
+                  "%04X %04X %04X %04X %04X %04X %04X %04X "
+                  "AX=%04X BX=%04X CX=%04X DX=%04X SI=%04X DI=%04X BP=%04X\n",
+                  SS, SP,
+                  readmemwl(ss + SP), readmemwl(ss + ((SP + 2) & 0xffff)),
+                  readmemwl(ss + ((SP + 4) & 0xffff)),
+                  readmemwl(ss + ((SP + 6) & 0xffff)),
+                  readmemwl(ss + ((SP + 8) & 0xffff)),
+                  readmemwl(ss + ((SP + 10) & 0xffff)),
+                  readmemwl(ss + ((SP + 12) & 0xffff)),
+                  readmemwl(ss + ((SP + 14) & 0xffff)),
+                  AX, BX, CX, DX, SI, DI, BP);
+            for (uint32_t a = 0x1040; a < 0x1120; a += 16)
+                pclog("TP700 CMOS 00164 CODE %08X: "
+                      "%02X %02X %02X %02X %02X %02X %02X %02X "
+                      "%02X %02X %02X %02X %02X %02X %02X %02X\n",
+                      cs + a,
+                      readmembl(cs + a), readmembl(cs + a + 1),
+                      readmembl(cs + a + 2), readmembl(cs + a + 3),
+                      readmembl(cs + a + 4), readmembl(cs + a + 5),
+                      readmembl(cs + a + 6), readmembl(cs + a + 7),
+                      readmembl(cs + a + 8), readmembl(cs + a + 9),
+                      readmembl(cs + a + 10), readmembl(cs + a + 11),
+                      readmembl(cs + a + 12), readmembl(cs + a + 13),
+                      readmembl(cs + a + 14), readmembl(cs + a + 15));
+        }
+    }
     switch (reg) {
         case RTC_SECONDS: /* bit 7 of seconds is read-only */
             nvr_reg_common_write(reg, val & 0x7f, nvr, local);
@@ -911,6 +945,11 @@ nvr_read(uint16_t addr, void *priv)
         if (alt_access)
             ret = (ret & 0x7f) | (nmi_mask ? 0x00 : 0x80);
     }
+
+    if (0 && !strcmp(machine_get_internal_name(), "ibmtp700") && (addr & 1) &&
+        (local->addr[addr_id] >= 0x0e))
+        pclog("TP700 CMOS READ: reg=%02X data=%02X from=%04X:%08X\n",
+              local->addr[addr_id], ret, CS, cpu_state.pc);
 
     return ret;
 }

@@ -5,14 +5,21 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <sys/stat.h>
+#include <time.h>
 #include <sys/param.h>
 /* This #undef is needed because a SDL include header redefines HAVE_STDARG_H. */
 #undef HAVE_STDARG_H
 #define HAVE_STDARG_H
 #include <86box/86box.h>
 #include <86box/device.h>
+#include <86box/io.h>
+#include <86box/machine.h>
 #include <86box/plat.h>
 #include <86box/plat_dynld.h>
+#include <86box/sound.h>
 #include <86box/video.h>
 #include <86box/ui.h>
 #include <86box/version.h>
@@ -60,6 +67,304 @@ int                 resize_pending    = 0;
 int                 resize_w          = 0;
 int                 resize_h          = 0;
 static void        *pixeldata         = NULL;
+
+typedef struct tp700_panel_controls {
+    int      baseline_set;
+    int      brightness;
+    int      contrast;
+    int      invert;
+    int      volume_mode;
+    int      baseline_brightness;
+    int      baseline_contrast;
+    int      baseline_volume_mode;
+    int      original_sound_muted;
+    int      original_sound_gain;
+    int      sound_saved;
+    uint8_t  lut[256];
+    uint32_t last_poll;
+    uint32_t *pixels;
+    size_t   pixel_capacity;
+} tp700_panel_controls;
+
+static tp700_panel_controls tp700_controls;
+
+enum {
+    TP700_VOLUME_MUTE = 0,
+    TP700_VOLUME_MIDDLE,
+    TP700_VOLUME_MAXIMUM
+};
+
+static int
+tp700_status_fresh(const char *path)
+{
+    struct stat status;
+    time_t      now = time(NULL);
+
+    return stat(path, &status) == 0 && now >= status.st_mtime &&
+           now - status.st_mtime <= 2;
+}
+
+static int
+tp700_read_status(const char *path, char *buffer, size_t size)
+{
+    FILE  *stream;
+    size_t count;
+
+    if (!tp700_status_fresh(path) || size < 2)
+        return 0;
+    stream = fopen(path, "r");
+    if (stream == NULL)
+        return 0;
+    count = fread(buffer, 1, size - 1, stream);
+    fclose(stream);
+    buffer[count] = '\0';
+    return count > 0;
+}
+
+static const char *
+tp700_json_value(const char *json, const char *key)
+{
+    const char *value = strstr(json, key);
+
+    if (value == NULL)
+        return NULL;
+    value = strchr(value + strlen(key), ':');
+    if (value == NULL)
+        return NULL;
+    do {
+        ++value;
+    } while (*value != '\0' && isspace((unsigned char) *value));
+    return value;
+}
+
+static int
+tp700_json_int(const char *json, const char *key, int *result)
+{
+    const char *value = tp700_json_value(json, key);
+    char       *end;
+    long        parsed;
+
+    if (value == NULL || !isdigit((unsigned char) *value))
+        return 0;
+    parsed = strtol(value, &end, 10);
+    if (end == value)
+        return 0;
+    *result = (int) parsed;
+    return 1;
+}
+
+static int
+tp700_json_bool(const char *json, const char *key, int *result)
+{
+    const char *value = tp700_json_value(json, key);
+
+    if (value == NULL)
+        return 0;
+    if (!strncmp(value, "true", 4)) {
+        *result = 1;
+        return 1;
+    }
+    if (!strncmp(value, "false", 5)) {
+        *result = 0;
+        return 1;
+    }
+    return 0;
+}
+
+static int
+tp700_slider_value(const char *json, const char *section_name, int *result)
+{
+    const char *section = strstr(json, section_name);
+
+    return section != NULL && tp700_json_int(section, "\"filtered_percent\"", result);
+}
+
+static int
+tp700_volume_value(const char *json, int *result)
+{
+    const char *value = tp700_json_value(json, "\"volume\"");
+
+    if (value == NULL)
+        return 0;
+    if (!strncmp(value, "\"mute\"", 6))
+        *result = TP700_VOLUME_MUTE;
+    else if (!strncmp(value, "\"middle\"", 8))
+        *result = TP700_VOLUME_MIDDLE;
+    else if (!strncmp(value, "\"maximum\"", 9))
+        *result = TP700_VOLUME_MAXIMUM;
+    else
+        return 0;
+    return 1;
+}
+
+static int
+tp700_volume_db(int mode)
+{
+    return mode == TP700_VOLUME_MIDDLE ? -6 : 0;
+}
+
+static void
+tp700_controls_build_lut(void)
+{
+    double brightness_gain;
+    double contrast_factor;
+
+    brightness_gain = (double) MAX(tp700_controls.brightness, 1) /
+                      (double) MAX(tp700_controls.baseline_brightness, 1);
+    contrast_factor = 1.0 +
+                      (double) (tp700_controls.contrast -
+                                tp700_controls.baseline_contrast) / 50.0;
+    if (contrast_factor < 0.25)
+        contrast_factor = 0.25;
+    if (contrast_factor > 3.0)
+        contrast_factor = 3.0;
+
+    for (int index = 0; index < 256; ++index) {
+        double value = (double) index / 255.0;
+        int    mapped;
+
+        if (tp700_controls.invert)
+            value = 1.0 - value;
+        value = (value - 0.5) * contrast_factor + 0.5;
+        value *= brightness_gain;
+        mapped = (int) (value * 255.0 + 0.5);
+        tp700_controls.lut[index] = (uint8_t) MIN(255, MAX(0, mapped));
+    }
+}
+
+static void
+tp700_controls_poll(void)
+{
+    const char *slider_path;
+    const char *switch_path;
+    char        slider_json[4096];
+    char        switch_json[2048];
+    uint32_t    now = SDL_GetTicks();
+    int         host_controls_enabled;
+    int         brightness;
+    int         contrast;
+    int         invert;
+    int         volume_mode;
+    int         changed;
+    int         volume_changed;
+
+    if (strcmp(machine_get_internal_name(), "ibmtp700") != 0)
+        return;
+    if (tp700_controls.last_poll != 0 &&
+        (uint32_t) (now - tp700_controls.last_poll) < 100)
+        return;
+    tp700_controls.last_poll = now;
+
+    slider_path = getenv("TP700_SLIDER_STATUS");
+    switch_path = getenv("TP700_SWITCH_STATUS");
+    if (slider_path == NULL)
+        slider_path = "/run/thinkpad700c-leds/slider-status.json";
+    if (switch_path == NULL)
+        switch_path = "/run/thinkpad700c-leds/switch-status.json";
+    if (!tp700_read_status(slider_path, slider_json, sizeof(slider_json)) ||
+        !tp700_read_status(switch_path, switch_json, sizeof(switch_json)) ||
+        !tp700_json_bool(slider_json, "\"host_controls_enabled\"",
+                         &host_controls_enabled) ||
+        host_controls_enabled ||
+        !tp700_json_bool(switch_json, "\"host_controls_enabled\"",
+                         &host_controls_enabled) ||
+        host_controls_enabled ||
+        !tp700_slider_value(slider_json, "\"brightness\"", &brightness) ||
+        !tp700_slider_value(slider_json, "\"contrast\"", &contrast) ||
+        !tp700_json_int(switch_json, "\"invert\"", &invert) ||
+        !tp700_volume_value(switch_json, &volume_mode))
+        return;
+
+    brightness = MIN(100, MAX(1, brightness));
+    contrast   = MIN(100, MAX(1, contrast));
+    invert     = !!invert;
+
+    if (!tp700_controls.baseline_set) {
+        tp700_controls.baseline_set        = 1;
+        tp700_controls.baseline_brightness = brightness;
+        tp700_controls.baseline_contrast   = contrast;
+        tp700_controls.baseline_volume_mode = volume_mode;
+        tp700_controls.original_sound_muted = sound_muted;
+        tp700_controls.original_sound_gain  = sound_gain;
+        tp700_controls.sound_saved          = 1;
+    }
+
+    changed = brightness != tp700_controls.brightness ||
+              contrast != tp700_controls.contrast ||
+              invert != tp700_controls.invert;
+    volume_changed = volume_mode != tp700_controls.volume_mode;
+    tp700_controls.brightness  = brightness;
+    tp700_controls.contrast    = contrast;
+    tp700_controls.invert      = invert;
+    tp700_controls.volume_mode = volume_mode;
+    if (changed)
+        tp700_controls_build_lut();
+
+    if (volume_mode == TP700_VOLUME_MUTE) {
+        sound_muted = 1;
+    } else {
+        sound_muted = 0;
+        sound_gain = tp700_controls.original_sound_gain +
+                     tp700_volume_db(volume_mode) -
+                     tp700_volume_db(tp700_controls.baseline_volume_mode);
+    }
+    if (changed || volume_changed)
+        pclog("TP700 PANEL: brightness=%d base=%d contrast=%d base=%d "
+              "invert=%d volume=%d muted=%d gain=%d (guest-only)\n",
+              brightness, tp700_controls.baseline_brightness,
+              contrast, tp700_controls.baseline_contrast,
+              invert, volume_mode, sound_muted, sound_gain);
+}
+
+static const void *
+tp700_controls_transform(const void *source, int width, int height)
+{
+    const uint32_t *input = (const uint32_t *) source;
+    size_t          needed;
+
+    tp700_controls_poll();
+    if (!tp700_controls.baseline_set ||
+        (!tp700_controls.invert &&
+         tp700_controls.brightness == tp700_controls.baseline_brightness &&
+         tp700_controls.contrast == tp700_controls.baseline_contrast))
+        return source;
+
+    needed = (size_t) 2048 * (size_t) height;
+    if (needed > tp700_controls.pixel_capacity) {
+        uint32_t *replacement = realloc(tp700_controls.pixels,
+                                        needed * sizeof(uint32_t));
+        if (replacement == NULL)
+            return source;
+        tp700_controls.pixels        = replacement;
+        tp700_controls.pixel_capacity = needed;
+    }
+
+    for (int row = 0; row < height; ++row) {
+        const uint32_t *src = input + row * 2048;
+        uint32_t       *dst = tp700_controls.pixels + row * 2048;
+
+        for (int column = 0; column < width; ++column) {
+            uint32_t pixel = src[column];
+            dst[column] = (pixel & 0xff000000U) |
+                          ((uint32_t) tp700_controls.lut[(pixel >> 16) & 0xff] << 16) |
+                          ((uint32_t) tp700_controls.lut[(pixel >> 8) & 0xff] << 8) |
+                          (uint32_t) tp700_controls.lut[pixel & 0xff];
+        }
+    }
+    return tp700_controls.pixels;
+}
+
+void
+tp700_panel_controls_close(void)
+{
+    if (tp700_controls.sound_saved) {
+        sound_muted = tp700_controls.original_sound_muted;
+        sound_gain  = tp700_controls.original_sound_gain;
+    }
+    free(tp700_controls.pixels);
+    tp700_controls.pixels        = NULL;
+    tp700_controls.pixel_capacity = 0;
+}
 
 void sdl_reinit_texture(void);
 
@@ -208,13 +513,117 @@ sdl_real_blit(SDL_Rect *r_src)
     SDL_Rect r_dst;
     int      winx;
     int      winy;
+    const int tp700 = !strcmp(machine_get_internal_name(), "ibmtp700");
+
+    /* VGA briefly reports the 80 text columns as an 80-pixel frame while a
+       new text timing is being latched.  It is not a complete scanout; keep
+       the last valid panel image instead of magnifying that one-frame mode
+       transition across the LCD. */
+    if (tp700 && (r_src->w < 320))
+        return;
 
     sdl_get_output_size(&winx, &winy);
 
     r_dst   = *r_src;
     r_dst.x = r_dst.y = 0;
 
-    if (sdl_fs) {
+    if (tp700) {
+        const int post_memory = tp700_post_memory_display_active();
+
+        /*
+         * The 9552 always has one 640x480 physical LCD canvas.  Its VGA
+         * sources do not all have the same height: POST/DOS text is normally
+         * delivered as 400 lines and is centred on that canvas, while the
+         * Reference Diskette and Windows also use true 480-line frames.
+         *
+         * Treating every source as 400 lines made a 480-line menu shrink a
+         * second time; resizing the host window from the current source then
+         * made the apparent bezel move at each mode set.  Establish the panel
+         * rectangle first, and only letterbox sources which really are below
+         * 480 lines.  The panel mapping is independent of the POST overlay
+         * state, so its left and right edges cannot jump between stages.
+         */
+        if (sdl_fs) {
+            r_dst.w = winx;
+            r_dst.h = (winx * 3) / 4;
+            if (r_dst.h > winy) {
+                r_dst.h = winy;
+                r_dst.w = (winy * 4) / 3;
+            }
+            r_dst.x = (winx - r_dst.w) / 2;
+            r_dst.y = (winy - r_dst.h) / 2;
+        } else {
+            r_dst.w = winx;
+            r_dst.h = winy;
+        }
+
+        if (r_src->h < 480) {
+            int active_height = (r_dst.h * r_src->h) / 480;
+
+            if (active_height < 1)
+                active_height = 1;
+            r_dst.y += (r_dst.h - active_height) / 2;
+            r_dst.h = active_height;
+        }
+
+        /*
+         * Every 80-column screen begins at VGA column zero, while the real
+         * LCD has roughly one and a half character cells hidden behind its
+         * left safe edge.  Keep the same text safe area for the complete
+         * lifetime of every 400-line mode.  In particular, do not rescale the
+         * picture when the POST memory checkpoint state changes halfway
+         * through the count.  True 640x480 Windows graphics remains
+         * pixel-for-pixel.
+         */
+        if ((r_src->h == 400) &&
+            ((r_src->w == 640) || (r_src->w == 720))) {
+            int text_margin = r_dst.w / 80;
+            int left_margin;
+
+            if (text_margin < 1)
+                text_margin = 1;
+            left_margin = text_margin + text_margin / 2;
+            if (r_dst.w > left_margin + text_margin) {
+                r_dst.x += left_margin;
+                r_dst.w -= left_margin + text_margin;
+            }
+        }
+
+        {
+            static int last_src_w = -1;
+            static int last_src_h = -1;
+            static int last_out_w = -1;
+            static int last_out_h = -1;
+            static int last_dst_x = -1;
+            static int last_dst_y = -1;
+            static int last_dst_w = -1;
+            static int last_dst_h = -1;
+            static int last_fs    = -1;
+            static int last_post  = -1;
+
+            if ((last_src_w != r_src->w) || (last_src_h != r_src->h) ||
+                (last_out_w != winx) || (last_out_h != winy) ||
+                (last_dst_x != r_dst.x) || (last_dst_y != r_dst.y) ||
+                (last_dst_w != r_dst.w) || (last_dst_h != r_dst.h) ||
+                (last_fs != sdl_fs) || (last_post != post_memory)) {
+                pclog("TP700 LCD MAP: source=%dx%d output=%dx%d "
+                      "destination=%d,%d %dx%d fullscreen=%d post=%d\n",
+                      r_src->w, r_src->h, winx, winy, r_dst.x, r_dst.y,
+                      r_dst.w, r_dst.h, sdl_fs,
+                      post_memory);
+                last_src_w = r_src->w;
+                last_src_h = r_src->h;
+                last_out_w = winx;
+                last_out_h = winy;
+                last_dst_x = r_dst.x;
+                last_dst_y = r_dst.y;
+                last_dst_w = r_dst.w;
+                last_dst_h = r_dst.h;
+                last_fs    = sdl_fs;
+                last_post  = post_memory;
+            }
+        }
+    } else if (sdl_fs) {
         sdl_stretch(&r_dst.w, &r_dst.h, &r_dst.x, &r_dst.y);
     } else {
         r_dst.w *= ((float) winx / (float) r_dst.w);
@@ -226,11 +635,14 @@ sdl_real_blit(SDL_Rect *r_src)
                     r_dst.x, r_dst.y, r_dst.w, r_dst.h);
 #else
     SDL_Rect src_rect = { 0, 0, r_src->w, r_src->h };
+    const void *texture_pixels;
 
     if (sdl_render == NULL || sdl_tex == NULL || sdl_osd_tex == NULL)
         return;
 
-    if (SDL_UpdateTexture(sdl_tex, &src_rect, pixeldata, 2048 * (int) sizeof(uint32_t)) < 0)
+    texture_pixels = tp700_controls_transform(pixeldata, r_src->w, r_src->h);
+    if (SDL_UpdateTexture(sdl_tex, &src_rect, texture_pixels,
+                          2048 * (int) sizeof(uint32_t)) < 0)
         return;
 
     SDL_SetRenderDrawColor(sdl_render, 0, 0, 0, 255);
@@ -397,8 +809,12 @@ sdl_reinit_texture(void)
 
     sdl_destroy_texture();
 
-    sdl_render = SDL_CreateRenderer(sdl_win, -1, SDL_RENDERER_ACCELERATED);
-    if (sdl_render == NULL) {
+    if (sdl_flags & RENDERER_HARDWARE)
+        sdl_render = SDL_CreateRenderer(sdl_win, -1, SDL_RENDERER_ACCELERATED);
+    else
+        sdl_render = SDL_CreateRenderer(sdl_win, -1, SDL_RENDERER_SOFTWARE);
+
+    if ((sdl_render == NULL) && (sdl_flags & RENDERER_HARDWARE)) {
         SDL_SetHint(SDL_HINT_RENDER_DRIVER, "");
         sdl_render = SDL_CreateRenderer(sdl_win, -1, SDL_RENDERER_SOFTWARE);
     }
@@ -433,7 +849,12 @@ sdl_set_fs(int fs)
 #endif
     if (fs) {
         SDL_SetRelativeMouseMode(SDL_TRUE);
+        SDL_ShowCursor(SDL_FALSE);
         mouse_capture = 1;
+    } else {
+        SDL_SetRelativeMouseMode(SDL_FALSE);
+        SDL_ShowCursor(SDL_TRUE);
+        mouse_capture = 0;
     }
 
     sdl_fs = fs;
@@ -450,6 +871,8 @@ sdl_set_fs(int fs)
 void
 sdl_resize(int x, int y)
 {
+    int target_x = x;
+    int target_y = y;
     int ww = 0;
     int wh = 0;
     int wx = 0;
@@ -458,16 +881,22 @@ sdl_resize(int x, int y)
     if (video_fullscreen & 2)
         return;
 
-    if ((x == cur_w) && (y == cur_h))
+    /* The 9552 has one fixed-size LCD; guest mode changes occur inside it. */
+    if (!strcmp(machine_get_internal_name(), "ibmtp700")) {
+        target_x = 640;
+        target_y = 480;
+    }
+
+    if ((target_x == cur_w) && (target_y == cur_h))
         return;
 
     SDL_LockMutex(sdl_mutex);
 
-    ww = x;
-    wh = y;
+    ww = target_x;
+    wh = target_y;
 
-    cur_w = x;
-    cur_h = y;
+    cur_w = target_x;
+    cur_h = target_y;
 
     cur_wx = wx;
     cur_wy = wy;
@@ -519,6 +948,10 @@ sdl_init_common(int flags)
         fprintf(stderr, "SDL: initialization failed (%s)\n", SDL_GetError());
         return (0);
     }
+
+    /* sdl_reinit_texture() needs the selected backend before the initial
+       fullscreen/window setup creates its first texture. */
+    sdl_flags = flags;
 
     // Ensure mouse and touchpads behaves the same for us, dunno if these really do something
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "1");
@@ -602,6 +1035,13 @@ plat_mouse_capture(int on)
 {
     SDL_LockMutex(sdl_mutex);
     SDL_SetRelativeMouseMode((SDL_bool) on);
+    if (!on) {
+        /* Relative mode normally releases the grab by itself, but X11 and
+           some compositors can leave an explicit window/capture grab behind
+           after a fullscreen transition. */
+        SDL_CaptureMouse(SDL_FALSE);
+        SDL_SetWindowGrab(sdl_win, SDL_FALSE);
+    }
     SDL_ShowCursor((SDL_bool) !on);
     mouse_capture = on;
     SDL_UnlockMutex(sdl_mutex);

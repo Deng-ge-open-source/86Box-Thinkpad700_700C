@@ -80,8 +80,24 @@ opRETF_a16_imm(uint32_t fetchdat)
     int      cycles_old = cycles;
     UN_USED(cycles_old);
 
+    if (0 && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+        (CS == 0xf000) && (cpu_state.oldpc == 0x6d14) &&
+        ((AX == 0x9001) || (AX == 0x9101)))
+        pclog("TP700 RETF2 BEFORE(2386): AX=%04X SS:SP=%04X:%04X "
+              "use32=%03X stack32=%d words=%04X %04X %04X %04X\n",
+              AX, SS, (uint16_t) ESP, use32, stack32,
+              readmemw(ss, SP), readmemw(ss, (SP + 2) & 0xffff),
+              readmemw(ss, (SP + 4) & 0xffff),
+              readmemw(ss, (SP + 6) & 0xffff));
+
     CPU_BLOCK_END();
     RETF_a16(offset);
+
+    if (0 && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+        ((AX == 0x9001) || (AX == 0x9101)))
+        pclog("TP700 RETF2 AFTER(2386): AX=%04X CS:IP=%04X:%04X "
+              "SS:SP=%04X:%04X\n", AX, CS, (uint16_t) cpu_state.pc,
+              SS, (uint16_t) ESP);
 
     PREFETCH_RUN(cycles_old - cycles, 3, -1, 2, 0, 0, 0, 0);
     PREFETCH_FLUSH();
@@ -189,6 +205,19 @@ opIRET(UNUSED(uint32_t fetchdat))
 {
     int cycles_old = cycles;
     UN_USED(cycles_old);
+    const int tp700_fdc_iret = 0;
+
+    if (tp700_fdc_iret)
+        pclog("TP700 FDC IRET BEFORE(2386): SS:SP=%04X:%04X "
+              "words=%04X %04X %04X | %04X %04X %04X %04X "
+              "AX=%04X DS=%04X FLAGS=%04X DS3E=%02X\n", SS, (uint16_t) ESP,
+              readmemw(ss, SP), readmemw(ss, (SP + 2) & 0xffff),
+              readmemw(ss, (SP + 4) & 0xffff),
+              readmemw(ss, (SP + 6) & 0xffff),
+              readmemw(ss, (SP + 8) & 0xffff),
+              readmemw(ss, (SP + 10) & 0xffff),
+              readmemw(ss, (SP + 12) & 0xffff),
+              AX, DS, cpu_state.flags, readmemb(ds, 0x003e));
 
     if ((cr0 & 1) && (cpu_state.eflags & VM_FLAG) && (IOPL != 3)) {
         if (cr4 & CR4_VME) {
@@ -244,6 +273,12 @@ opIRET(UNUSED(uint32_t fetchdat))
         }
     }
     flags_extract();
+    tp700_int21_trace_return(CS, (uint16_t) cpu_state.pc, AX,
+                             (uint16_t) cpu_state.flags);
+    if (tp700_fdc_iret)
+        pclog("TP700 FDC IRET AFTER(2386): CS:IP=%04X:%04X SS:SP=%04X:%04X "
+              "DS=%04X FLAGS=%04X DS3E=%02X\n", CS, (uint16_t) cpu_state.pc,
+              SS, (uint16_t) ESP, DS, cpu_state.flags, readmemb(ds, 0x003e));
     nmi_enable = 1;
     rf_flag_no_clear = 1;
     CPU_BLOCK_END();

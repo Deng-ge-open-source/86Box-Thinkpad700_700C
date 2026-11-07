@@ -1438,8 +1438,11 @@ extern int             machine_ps2_m30_286_init(const machine_t *);
 /* m_ps2_mca.c */
 #ifdef EMU_DEVICE_H
 extern const device_t  ps2_model_50_device;
+extern const device_t  thinkpad_700_device;
 #endif
 extern int             machine_ps2_model_50_init(const machine_t *);
+extern int             machine_thinkpad_700_init(const machine_t *);
+extern void            machine_thinkpad_700_reset_shadow(void);
 extern int             machine_ps2_model_60_init(const machine_t *);
 extern int             machine_ps2_model_55sx_init(const machine_t *);
 extern int             machine_ps2_model_65sx_init(const machine_t *);

@@ -485,7 +485,10 @@ fdd_type_invert_densel(int type)
     int ret;
 
     if (drive_types[type].flags & FLAG_PS2)
-        ret = (!!strstr(machine_getname(machine), "PS/1")) || (!!strstr(machine_getname(machine), "PS/2")) || (!!strstr(machine_getname(machine), "PS/55"));
+        ret = (!!strstr(machine_getname(machine), "PS/1")) ||
+              (!!strstr(machine_getname(machine), "PS/2")) ||
+              (!!strstr(machine_getname(machine), "PS/55")) ||
+              (!strcmp(machine_get_internal_name(), "ibmtp700"));
     else
         ret = drive_types[type].flags & FLAG_INVERT_DENSEL;
 
@@ -657,6 +660,9 @@ void
 fdd_load(int drive, char *fn)
 {
     fdd_log("fdd_load(%d, %s)\n", drive, fn);
+    if (0 && !strcmp(machine_get_internal_name(), "ibmtp700"))
+        pclog("TP700 FDD LOAD: drive=%d requested=%s\n", drive,
+              fn ? fn : "(null)");
     int         c = 0;
     int         size;
     const char *p;
@@ -718,6 +724,10 @@ fdd_load(int drive, char *fn)
                 d86f_setup(drive);
                 loaders[c].load(drive, floppyfns[drive] + offs);
                 drive_empty[drive] = 0;
+                if (!strcmp(machine_get_internal_name(), "ibmtp700"))
+                    pclog("TP700 FDD LOAD OK: drive=%d file=%s size=%d "
+                          "loader=%s\n", drive, floppyfns[drive], size,
+                          loaders[c].ext);
                 fdd_forced_seek(drive, 0);
                 fdd_changed[drive] = 1;
                 ui_sb_update_icon_wp(SB_FLOPPY | drive, ui_writeprot[drive]);
@@ -727,6 +737,9 @@ fdd_load(int drive, char *fn)
         }
     }
     drive_empty[drive] = 1;
+    if (0 && !strcmp(machine_get_internal_name(), "ibmtp700"))
+        pclog("TP700 FDD LOAD FAILED: drive=%d file=%s\n", drive,
+              fn ? fn : "(null)");
     fdd_set_head(drive, 0);
     memset(floppyfns[drive], 0, sizeof(floppyfns[drive]));
     ui_sb_update_icon_state(SB_FLOPPY | drive, 1);
@@ -786,6 +799,12 @@ fdd_set_motor_enable(int drive, int motor_enable)
     fdd_log("fdd_set_motor_enable(%d, %d)\n", drive, motor_enable);
     fdd_audio_set_motor_enable(drive, motor_enable);
 
+    if (!strcmp(machine_get_internal_name(), "ibmtp700"))
+        pclog("TP700 FDD MOTOR: drive=%d request=%02X prior=%02llX "
+              "byteperiod=%llu\n", drive, motor_enable,
+              (unsigned long long) motoron[drive],
+              (unsigned long long) fdd_byteperiod(drive));
+
     if (motor_enable && !motoron[drive]) {
         timer_set_delay_u64(&fdd_poll_time[drive], fdd_byteperiod(drive));
     } else if (!motor_enable && motoron[drive]) {
@@ -799,8 +818,17 @@ fdd_poll(void *priv)
 {
     int          drive;
     const DRIVE *drv = (DRIVE *) priv;
+    static uint64_t tp700_poll_count[FDD_NUM] = { 0 };
 
     drive = drv->id;
+
+    tp700_poll_count[drive]++;
+    if (0 && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+        ((tp700_poll_count[drive] <= 12) ||
+         ((tp700_poll_count[drive] % 1000000) == 0)))
+        pclog("TP700 FDD POLL: drive=%d count=%llu motor=%02llX poll=%p\n",
+              drive, (unsigned long long) tp700_poll_count[drive],
+              (unsigned long long) motoron[drive], (void *) drv->poll);
 
     if (drive >= FDD_NUM)
         fatal("Attempting to poll floppy drive %i that is not supposed to be there\n", drive);

@@ -1563,7 +1563,11 @@ load_hard_disks(void)
 
             case HDD_BUS_ESDI:
                 max_spt    = 99;
-                max_hpc    = 16;
+                /*
+                 * The ThinkPad 700's ESDI firmware uses a translated
+                 * 64-head geometry for its 345/64/32 system disk.
+                 */
+                max_hpc    = !strcmp(machine_get_internal_name(), "ibmtp700") ? 64 : 16;
                 max_tracks = 266305;
                 break;
 

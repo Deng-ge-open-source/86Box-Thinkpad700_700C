@@ -80,8 +80,35 @@ opRETF_a16_imm(uint32_t fetchdat)
     int      cycles_old = cycles;
     UN_USED(cycles_old);
 
+    if (0 && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+        (offset == 2) && (readmemw(ss, SP) == 0x0422) &&
+        (readmemw(ss, (SP + 2) & 0xffff) == 0x9f44))
+        pclog("TP700 INT13 RETURN: handler=%04X:%04X target=9F44:0422 "
+              "AX=%04X FLAGS=%04X saved_flags=%04X "
+              "buffer_head=%02X %02X %02X %02X\n",
+              CS, (uint16_t) cpu_state.oldpc, AX, cpu_state.flags,
+              readmemw(ss, (SP + 4) & 0xffff),
+              ram[es + BX], ram[es + BX + 1],
+              ram[es + BX + 2], ram[es + BX + 3]);
+
+    if (0 && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+        (CS == 0xf000) && (cpu_state.oldpc == 0x6d14) &&
+        ((AX == 0x9001) || (AX == 0x9101)))
+        pclog("TP700 RETF2 BEFORE(exec): AX=%04X SS:SP=%04X:%04X "
+              "use32=%03X stack32=%d words=%04X %04X %04X %04X\n",
+              AX, SS, (uint16_t) ESP, use32, stack32,
+              readmemw(ss, SP), readmemw(ss, (SP + 2) & 0xffff),
+              readmemw(ss, (SP + 4) & 0xffff),
+              readmemw(ss, (SP + 6) & 0xffff));
+
     CPU_BLOCK_END();
     RETF_a16(offset);
+
+    if (0 && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+        ((AX == 0x9001) || (AX == 0x9101)))
+        pclog("TP700 RETF2 AFTER(exec): AX=%04X CS:IP=%04X:%04X "
+              "SS:SP=%04X:%04X\n", AX, CS, (uint16_t) cpu_state.pc,
+              SS, (uint16_t) ESP);
 
     PREFETCH_RUN(cycles_old - cycles, 3, -1, 2, 0, 0, 0, 0);
     PREFETCH_FLUSH();
@@ -193,6 +220,31 @@ opIRET(UNUSED(uint32_t fetchdat))
 {
     int cycles_old = cycles;
     UN_USED(cycles_old);
+    const int tp700_fdc_iret = 0;
+    const int tp700_int13_iret = 0;
+
+    if (tp700_int13_iret)
+        pclog("TP700 INT13 IRET BEFORE: SS:SP=%04X:%04X "
+              "words=%04X %04X %04X %04X %04X %04X "
+              "AX=%04X FLAGS=%04X\n",
+              SS, SP, readmemw(ss, SP),
+              readmemw(ss, (SP + 2) & 0xffff),
+              readmemw(ss, (SP + 4) & 0xffff),
+              readmemw(ss, (SP + 6) & 0xffff),
+              readmemw(ss, (SP + 8) & 0xffff),
+              readmemw(ss, (SP + 10) & 0xffff), AX, cpu_state.flags);
+
+    if (tp700_fdc_iret)
+        pclog("TP700 FDC IRET BEFORE(exec): SS:SP=%04X:%04X "
+              "words=%04X %04X %04X | %04X %04X %04X %04X "
+              "AX=%04X DS=%04X FLAGS=%04X DS3E=%02X\n", SS, (uint16_t) ESP,
+              readmemw(ss, SP), readmemw(ss, (SP + 2) & 0xffff),
+              readmemw(ss, (SP + 4) & 0xffff),
+              readmemw(ss, (SP + 6) & 0xffff),
+              readmemw(ss, (SP + 8) & 0xffff),
+              readmemw(ss, (SP + 10) & 0xffff),
+              readmemw(ss, (SP + 12) & 0xffff),
+              AX, DS, cpu_state.flags, readmemb(ds, 0x003e));
 
     if ((cr0 & 1) && (cpu_state.eflags & VM_FLAG) && (IOPL != 3)) {
         if (cr4 & CR4_VME) {
@@ -248,6 +300,16 @@ opIRET(UNUSED(uint32_t fetchdat))
         }
     }
     flags_extract();
+    tp700_int21_trace_return(CS, (uint16_t) cpu_state.pc, AX,
+                             (uint16_t) cpu_state.flags);
+    if (tp700_fdc_iret)
+        pclog("TP700 FDC IRET AFTER(exec): CS:IP=%04X:%04X SS:SP=%04X:%04X "
+              "DS=%04X FLAGS=%04X DS3E=%02X\n", CS, (uint16_t) cpu_state.pc,
+              SS, (uint16_t) ESP, DS, cpu_state.flags, readmemb(ds, 0x003e));
+    if (tp700_int13_iret)
+        pclog("TP700 INT13 IRET AFTER: CS:IP=%04X:%04X SS:SP=%04X:%04X "
+              "AX=%04X FLAGS=%04X\n", CS, (uint16_t) cpu_state.pc,
+              SS, SP, AX, cpu_state.flags);
     nmi_enable = 1;
 #ifdef USE_DEBUG_REGS_486
     rf_flag_no_clear = 1;
