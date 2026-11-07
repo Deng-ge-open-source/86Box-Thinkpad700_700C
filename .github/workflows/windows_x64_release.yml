@@ -5,6 +5,10 @@ on:
   push:
     paths:
       - .github/workflows/windows_x64_release.yml
+      - src/**
+      - cmake/**
+      - CMakeLists.txt
+      - CMakePresets.json
 
 permissions:
   contents: read
