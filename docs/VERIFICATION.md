@@ -52,6 +52,36 @@ loop did repeatedly scan all RAM for an old 700 IML signature on the 700C;
 normal builds now exclude that scan. No firmware memory test was skipped, and
 this change is not claimed to shorten the original 32-second memory check.
 
+## Windows physical USB floppy — 2026-11-13
+
+The Windows Qt build was tested with a TEAC USB UF000x drive assigned to `A:`
+and the user's physical 700C Reference Diskette. Windows reported 80 cylinders,
+two heads, 18 sectors per track and 512-byte sectors. Read-only inspection found
+`PF1EC.ADF`, `SF1EC.ADF` and `$0009000.IML` on the disk.
+
+With `fdd_01_fn = ioctl://\\.\A:`, the original F1EC ROM completed POST and
+booted the physical Reference Diskette to its main menu. The log recorded reads
+from the Windows device across multiple cylinders, exceeding 800 KiB, rather
+than loading the bundled floppy image. The selection was retained in the saved
+configuration. [Captured main menu](images/thinkpad700c-usb-floppy-reference.png).
+
+A focused hardware probe checked boot/root directory reads, out-of-range CHS
+rejection, rejection of the fixed `C:` volume, forced guest write protection and
+unchanged boot-sector bytes after a rejected write. The backend opens the host
+device with `GENERIC_READ` only and contains no physical write operation.
+The monochrome 700 image-backed regression also reached its known Reference
+Diskette idle firmware trace with the expected F1EE identity.
+
+The private runtime uses the existing maximum sound gain of +18 dB, with the
+original drive-profile levels. WASAPI loopback measured hard-disk output peak
+0.1170 versus 0.01473 at 0 dB (about 7.94 times the amplitude). The host monitor
+and Windows master volume were not changed.
+
+Only a 1.44 MB physical Reference Diskette and this USB drive were tested.
+720 KiB/2.88 MB physical media, a separate physical DOS startup disk, media
+removal while reading, physical formatting and the complete diagnostic suite
+remain unverified. Physical writes/formatting are intentionally unsupported.
+
 ## Repeat the source-only checks
 
 From the repository root, with Python 3 and GCC available:

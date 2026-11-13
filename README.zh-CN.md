@@ -188,6 +188,29 @@ roms/machines/ibmtp700/39G9996.bin
 **Set configuration → Run automatic configuration**。
 只处理工作副本，保留原始镜像。
 
+#### 在 Windows 上从 USB 实体软盘启动
+
+Windows 构建可以通过宿主软驱读取标准的 720 KiB、1.44 MB 或 2.88 MB 3.5 英寸软盘，
+实际可用格式取决于软驱。模拟机始终将实体盘视为**写保护**状态，尚未实现向实体盘写入
+或格式化。使用与机型匹配的 Reference Diskette，也可以使用可启动的 DOS 软盘。
+
+若宿主软驱盘符是 `A:`，在虚拟机已有的 `[Floppy and CD-ROM drives]` 节中设置：
+
+```ini
+fdd_01_type = 35_2hd
+fdd_01_fn = ioctl://\\.\A:
+fdd_01_host_device = \\.\A:
+fdd_host_buffering = 1
+```
+
+冷启动会通过模拟软驱控制器读取实体盘。宿主 Windows 需要先运行，700/700C ROM
+仍在 86Box 内执行；该选择会在重启后保留。更换软盘后，通过
+**介质 → 软驱 → Use Host Floppy Drive** 重新挂载，或重启虚拟机，清除临时磁道缓存。
+Windows 的设备访问可能需要管理员权限。这项功能不包含 USB 设备直通或实体软驱的
+底层硬件诊断。
+已在 Windows x64 上使用 TEAC USB UF000x 软驱，从实体 700C 参考盘启动到主菜单，
+详见[实体介质验证记录](docs/VERIFICATION.md#windows-physical-usb-floppy--2026-11-13)。
+
 #### 安装 700C Windows 彩色驱动
 
 **700C120 VGA256C 1.20 驱动盘**与 **R700C120 参考盘**是不同的介质。

@@ -3980,8 +3980,12 @@ save_floppy_and_cdrom_drives(void)
                                    fdd_get_internal_name(fdd_get_type(c)));
 
         sprintf(temp, "fdd_%02i_fn", c + 1);
-        /* Don't save ioctl:// paths */
-        if (strlen(floppyfns[c]) == 0 || strstr(floppyfns[c], "ioctl://") != NULL) {
+        /* Windows host floppy selections must survive the next cold boot. */
+        if (strlen(floppyfns[c]) == 0
+#ifndef _WIN32
+            || strstr(floppyfns[c], "ioctl://") != NULL
+#endif
+        ) {
             ini_section_delete_var(cat, temp);
 
             ui_writeprot[c] = 0;

@@ -228,6 +228,33 @@ the common 700/700C/720/720C Diagnostic Diskette when requested. Then run
 **Set configuration → Run automatic configuration**. Work on copies and keep
 the original images intact.
 
+#### Boot a physical USB floppy on Windows
+
+The Windows build can read a standard 720 KiB, 1.44 MB or 2.88 MB 3.5-inch disk
+through a host floppy drive. The drive must support the inserted disk's format.
+The guest always sees a **write-protected** disk; writing and formatting the
+physical medium are not implemented. Keep the model's matching Reference
+Diskette in the drive, or use a bootable DOS disk.
+
+For a host drive assigned `A:`, set these entries in the VM's existing
+`[Floppy and CD-ROM drives]` section:
+
+```ini
+fdd_01_type = 35_2hd
+fdd_01_fn = ioctl://\\.\A:
+fdd_01_host_device = \\.\A:
+fdd_host_buffering = 1
+```
+
+Cold boot then reads the physical disk through the emulated floppy controller.
+Windows must already be running; the 700/700C ROM executes inside 86Box.
+The selection survives a restart. After swapping disks, remount the drive using
+**Media → Floppy → Use Host Floppy Drive**, or restart the VM, to discard its
+temporary track cache. Windows device access may require an elevated process.
+This does not provide USB passthrough or low-level physical-drive diagnostics.
+The 700C Reference Diskette has been booted from a TEAC USB UF000x drive on
+Windows x64; see the [physical-media verification](docs/VERIFICATION.md#windows-physical-usb-floppy--2026-11-13).
+
 #### Install the 700C Windows color driver
 
 The **700C120 VGA256C driver 1.20** is a different disk from the
