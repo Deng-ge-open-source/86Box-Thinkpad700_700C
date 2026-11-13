@@ -67,8 +67,10 @@ static unsigned tp700_irq2_dispatches = 0;
 static unsigned tp700_dos_loop_trace = 0;
 static unsigned tp700_dos_irq_dispatches = 0;
 static unsigned tp700_spurious_irq_dispatches = 0;
+#ifdef ENABLE_386_DYNAREC_LOG
 static int      tp700_boot_iml_seen = 0;
 static int      tp700_planar_iml_seen = 0;
+#endif
 static int      tp700_boot_sector_entry_seen = 0;
 static int      tp700_dos_entry_seen = 0;
 static unsigned tp700_ram_entries = 0;
@@ -79,6 +81,9 @@ static int      tp700_final_trace_started = 0;
 static uint32_t tp700_previous_ivt1a = 0xffffffff;
 static unsigned tp700_command_events = 0;
 
+#ifdef ENABLE_386_DYNAREC_LOG
+/* Diagnostic only: a missing signature otherwise scans all RAM indefinitely
+   in the CPU hot path, including after DOS/Windows has overwritten the IML. */
 static uint32_t
 tp700_find_ram_signature(const uint8_t *signature, size_t signature_size)
 {
@@ -107,13 +112,16 @@ tp700_check_iml_signatures(void)
         0x01, 0x8f, 0x06, 0xe7, 0x01, 0x8f, 0x06, 0xa6,
         0x00, 0x8f, 0x06, 0xa8, 0x00, 0x8b, 0xec, 0x66
     };
-    static const uint8_t planar_iml_signature[] = {
+    uint8_t planar_iml_signature[] = {
         0x35, 0x39, 0x47, 0x33, 0x36, 0x35, 0x37, 0x20,
         0x28, 0x43, 0x29, 0x20, 0x43, 0x4f, 0x50, 0x59,
         0x52, 0x49, 0x47, 0x48, 0x54, 0x20, 0x49, 0x42,
         0x4d, 0x20, 0x43, 0x4f, 0x52, 0x50, 0x4f, 0x52
     };
     uint32_t offset;
+
+    if (!strcmp(machine_get_internal_name(), "ibmtp700c"))
+        planar_iml_signature[6] = '8';
 
     if (!tp700_boot_iml_seen) {
         offset = tp700_find_ram_signature(boot_iml_signature,
@@ -135,6 +143,7 @@ tp700_check_iml_signatures(void)
         }
     }
 }
+#endif
 
 #if defined(__aarch64__) || defined(_M_ARM64)
 /* ARM64-only epoch: monotonically advances on dirty-list transitions so
@@ -727,13 +736,13 @@ exec386_dynarec_dyn(void)
             if ((tp700_hdd_boot_pending == 2) &&
                 (((cs + cpu_state.pc) == 0x000f29dd) ||
                  ((cs + cpu_state.pc) == 0x00007c00)) &&
-                !strcmp(machine_get_internal_name(), "ibmtp700")) {
+                machine_is_thinkpad_700()) {
                 pclog("TP700 BOOT HANDOFF: committing HDD MBR after "
                       "ROM bootstrap read\n");
                 tp700_boot_hdd_post();
                 fetchdat = fastreadl_fetch(cs + cpu_state.pc);
             }
-            if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+            if (machine_is_thinkpad_700() &&
                 ((cs + cpu_state.pc == 0x000fd0ed) ||
                  (cs + cpu_state.pc == 0x000fd10e) ||
                  (cs + cpu_state.pc == 0x000f1669))) {
@@ -751,7 +760,7 @@ exec386_dynarec_dyn(void)
                       readmeml(ss, (BP + 8) & 0xffff));
             }
 #ifndef NDEBUG
-            if (!strcmp(machine_get_internal_name(), "ibmtp700")) {
+            if (machine_is_thinkpad_700()) {
                 const uint32_t physical_pc = cs + cpu_state.pc;
 
                 if (!tp700_boot_sector_entry_seen &&
@@ -774,7 +783,7 @@ exec386_dynarec_dyn(void)
                           (uint16_t) cpu_state.pc, physical_pc);
                 tp700_previous_physical_pc = physical_pc;
             }
-            if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+            if (machine_is_thinkpad_700() &&
                 (CS == 0xf000) && (cpu_state.pc == 0x4b97)) {
                 pclog("TP700 FATAL ENTRY: return=%04X SS:SP=%04X:%04X "
                       "AX=%04X BX=%04X CX=%04X DX=%04X "
@@ -782,7 +791,7 @@ exec386_dynarec_dyn(void)
                       readmemw(ss, SP), SS, SP, AX, BX, CX, DX,
                       SI, DI, DS, ES, cpu_state.flags);
             }
-            if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+            if (machine_is_thinkpad_700() &&
                 (CS == 0x0246) && (cpu_state.pc >= 0x0060) &&
                 (cpu_state.pc <= 0x00a0) &&
                 (tp700_dos_loop_trace++ < 384))
@@ -794,7 +803,7 @@ exec386_dynarec_dyn(void)
                       AX, BX, CX, DX, SI, DI, DS, ES, SS, SP,
                       cpu_state.flags, readmemw(0, 0x0006),
                       readmemw(0, 0x0004));
-            if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+            if (machine_is_thinkpad_700() &&
                 !tp700_wait_exit_budget && (tp700_wait_exit_events < 3) &&
                 (CS == 0xf000) && (cpu_state.pc == 0x65ac) &&
                 (ram[ds + 0x003e] & 0x80) && ((ESP & 0xffff) < 0x03c0)) {
@@ -816,7 +825,7 @@ exec386_dynarec_dyn(void)
                       readmemw(ss, (SP + 6) & 0xffff));
                 tp700_wait_exit_budget--;
             }
-            if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+            if (machine_is_thinkpad_700() &&
                 (CS == 0xf000) &&
                 ((cpu_state.pc == 0x6d02) || (cpu_state.pc == 0x6d14) ||
                  (cpu_state.pc == 0x6987)) &&
@@ -1018,7 +1027,9 @@ exec386_dynarec_dyn(void)
 void
 exec386_dynarec(int32_t cycs)
 {
+#ifdef ENABLE_386_DYNAREC_LOG
     static uint64_t tp700_dynarec_slices = 0;
+#endif
     static uint16_t tp700_prev_cs = 0xffff;
     static uint32_t tp700_prev_pc = 0xffffffff;
     static int      tp700_low_transitions = 0;
@@ -1032,7 +1043,7 @@ exec386_dynarec(int32_t cycs)
     uint64_t oldtsc;
     uint64_t delta;
 
-    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if (machine_is_thinkpad_700() &&
         (CS == 0) && (tp700_prev_cs != 0) && (tp700_low_transitions++ < 32))
         pclog("TP700 LOWRAM: from %04X:%08X to %04X:%08X "
               "bytes20=%02X %02X %02X %02X %02X %02X %02X %02X\n",
@@ -1040,7 +1051,7 @@ exec386_dynarec(int32_t cycs)
               ram[0x20], ram[0x21], ram[0x22], ram[0x23],
               ram[0x24], ram[0x25], ram[0x26], ram[0x27]);
 
-    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if (machine_is_thinkpad_700() &&
         ((tp700_prev_cs == 0xf000) || (tp700_prev_cs == 0xe000)) &&
         (CS != 0xf000) && (CS != 0xe000) && (CS != 0x0040) &&
         (tp700_bad_transitions++ < 32)) {
@@ -1056,7 +1067,7 @@ exec386_dynarec(int32_t cycs)
     tp700_prev_cs = CS;
     tp700_prev_pc = cpu_state.pc;
 
-    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if (machine_is_thinkpad_700() &&
         (CS == 0xe000) && (cpu_state.pc >= 0x7000) &&
         (tp700_e000_traces++ < 1024)) {
         const uint32_t stack = ss + (ESP & 0xffff);
@@ -1066,17 +1077,15 @@ exec386_dynarec(int32_t cycs)
               ram[stack], ram[stack + 1], ram[stack + 2], ram[stack + 3]);
     }
 
-    /* Keep the slice counter for the one-shot IML detector, but do not write
-       a diagnostic line every 256 slices.  That trace was useful while the
-       ROM hand-off was being implemented, but it causes visible mouse and
-       menu stutter in Windows 3.x by synchronously growing the log forever. */
-    if (!strcmp(machine_get_internal_name(), "ibmtp700"))
+#ifdef ENABLE_386_DYNAREC_LOG
+    if (machine_is_thinkpad_700())
         ++tp700_dynarec_slices;
 
-    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if (machine_is_thinkpad_700() &&
         ((tp700_dynarec_slices & 0xff) == 0) &&
         (!tp700_boot_iml_seen || !tp700_planar_iml_seen))
         tp700_check_iml_signatures();
+#endif
 
     int32_t cyc_period = cycs / (force_10ms ? 2000 : 200); /*5us*/
 
@@ -1167,7 +1176,7 @@ exec386_dynarec(int32_t cycs)
             } else if ((cpu_state.flags & I_FLAG) && pic.int_pending) {
                 vector = picinterrupt();
                 if (vector != -1) {
-                    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+                    if (machine_is_thinkpad_700() &&
                         (vector == 0x0f) &&
                         (tp700_spurious_irq_dispatches++ < 128))
                         pclog("TP700 IRQ7/SPURIOUS: from=%04X:%04X "
@@ -1178,7 +1187,7 @@ exec386_dynarec(int32_t cycs)
                               pic.int_pending, pic.interrupt,
                               pic2.irr, pic2.isr, pic2.imr,
                               pic2.int_pending);
-                    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+                    if (machine_is_thinkpad_700() &&
                         (vector == 0x0a)) {
                         const unsigned trace_index = tp700_irq2_dispatches++;
 
@@ -1285,14 +1294,14 @@ exec386(int32_t cycs)
             if ((tp700_hdd_boot_pending == 2) &&
                 (((cs + cpu_state.pc) == 0x000f29dd) ||
                  ((cs + cpu_state.pc) == 0x00007c00)) &&
-                !strcmp(machine_get_internal_name(), "ibmtp700")) {
+                machine_is_thinkpad_700()) {
                 pclog("TP700 BOOT HANDOFF: committing HDD MBR after "
                       "ROM bootstrap read\n");
                 tp700_boot_hdd_post();
                 fetchdat = fastreadl_fetch(cs + cpu_state.pc);
             }
 #ifndef NDEBUG
-            if (!strcmp(machine_get_internal_name(), "ibmtp700")) {
+            if (machine_is_thinkpad_700()) {
                 const uint32_t physical_pc = cs + cpu_state.pc;
 
                 if (!tp700_boot_sector_entry_seen &&
@@ -1315,7 +1324,7 @@ exec386(int32_t cycs)
                           (uint16_t) cpu_state.pc, physical_pc);
                 tp700_previous_physical_pc = physical_pc;
             }
-            if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+            if (machine_is_thinkpad_700() &&
                 (CS == 0x0246) && (cpu_state.pc >= 0x0060) &&
                 (cpu_state.pc <= 0x00a0) &&
                 (tp700_dos_loop_trace++ < 384))
@@ -1327,7 +1336,7 @@ exec386(int32_t cycs)
                       AX, BX, CX, DX, SI, DI, DS, ES, SS, SP,
                       cpu_state.flags, readmemw(0, 0x0006),
                       readmemw(0, 0x0004));
-            if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+            if (machine_is_thinkpad_700() &&
                 !tp700_wait_exit_budget && (tp700_wait_exit_events < 3) &&
                 (CS == 0xf000) && (cpu_state.pc == 0x65ac) &&
                 (readmemb(ds, 0x003e) & 0x80) &&
@@ -1352,7 +1361,7 @@ exec386(int32_t cycs)
                       readmemw(ss, (SP + 6) & 0xffff));
                 tp700_wait_exit_budget--;
             }
-            if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+            if (machine_is_thinkpad_700() &&
                 (CS == 0xf000) && (cpu_state.pc == 0xac5b) &&
                 (tp700_ac5b_entries++ < 8)) {
                 const uint32_t stack = ss + (ESP & 0xffff);
@@ -1366,7 +1375,7 @@ exec386(int32_t cycs)
                       nmi, nmi_enable, nmi_mask,
                       ram[readmemw(0, 0x040e) * 16 + 1]);
             }
-            if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+            if (machine_is_thinkpad_700() &&
                 (CS == 0xf000) && (cpu_state.pc == 0xaf5f) &&
                 (tp700_halt_traces++ < 4)) {
                 const uint32_t state_addr = ds + (ESI & 0xffff) + 1;
@@ -1381,7 +1390,7 @@ exec386(int32_t cycs)
                       ram[11], ram[10], ram[9], ram[8], ram[0x40f], ram[0x40e]);
             }
             ++tp700_exec_trace_instructions;
-            if (!strcmp(machine_get_internal_name(), "ibmtp700")) {
+            if (machine_is_thinkpad_700()) {
                 const uint32_t ivt1a = *(uint32_t *) &ram[0x0068];
 
                 if (ivt1a != tp700_previous_ivt1a) {
@@ -1422,7 +1431,7 @@ exec386(int32_t cycs)
                           readmemb(ds, 0x4314), readmemb(ds, 0x4315));
                 }
             }
-            if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+            if (machine_is_thinkpad_700() &&
                 (CS == 0x9f44) && (cpu_state.pc == 0x0420) &&
                 (AX == 0x0201) && (BX == 0x7c5a) && (CX == 0x0209))
                 tp700_final_int13_active = 1;
@@ -1446,11 +1455,13 @@ exec386(int32_t cycs)
                       readmemw(ss, (SP + 6) & 0xffff),
                       AX, BX, CX, DX, DS, ES, cpu_state.flags);
             }
-            if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+#ifdef ENABLE_386_DYNAREC_LOG
+            if (machine_is_thinkpad_700() &&
                 ((tp700_exec_trace_instructions & 0x0000ffff) == 0) &&
                 (!tp700_boot_iml_seen || !tp700_planar_iml_seen))
                 tp700_check_iml_signatures();
-            if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+#endif
+            if (machine_is_thinkpad_700() &&
                 ((tp700_exec_trace_instructions <= 2048) ||
                  ((tp700_exec_trace_instructions & 0x0000ffff) == 0))) {
                 pclog("TP700 EXEC: ins=%llu CS:IP=%04X:%08X phys=%08X op=%08X "
@@ -1578,7 +1589,7 @@ block_ended:
             } else if ((cpu_state.flags & I_FLAG) && pic.int_pending && !cpu_end_block_after_ins) {
                 vector = picinterrupt();
                 if (vector != -1) {
-                    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+                    if (machine_is_thinkpad_700() &&
                         (CS == 0x0246) && (cpu_state.pc >= 0x0060) &&
                         (cpu_state.pc <= 0x00a0) &&
                         (tp700_dos_irq_dispatches++ < 128))
@@ -1593,7 +1604,7 @@ block_ended:
                               readmemw(0, 0x0072), readmemw(0, 0x0070),
                               cpu_state.flags, pic.irr, pic.isr, pic.imr,
                               pic2.irr, pic2.isr, pic2.imr);
-                    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+                    if (machine_is_thinkpad_700() &&
                         (vector == 0x0a)) {
                         const unsigned trace_index = tp700_irq2_dispatches++;
 
@@ -1607,7 +1618,7 @@ block_ended:
                                   pic2.irr, pic2.isr, pic2.imr,
                                   pic.int_pending, pic2.int_pending);
                     }
-                    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+                    if (machine_is_thinkpad_700() &&
                         (vector >= 0x70) && (vector <= 0x77)) {
                         const uint32_t ivt_addr = (vector << 2) + idt.base;
 

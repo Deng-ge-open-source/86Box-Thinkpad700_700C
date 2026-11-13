@@ -16,6 +16,8 @@
 
 #include <86box/86box.h>
 #include <86box/keyboard.h>
+#include <86box/machine.h>
+#include <86box/vid_lcd.h>
 #include <86box/mouse.h>
 #include <86box/plat.h>
 #include <86box/thread.h>
@@ -551,6 +553,23 @@ main(int argc, char **argv)
                         {
                             uint16_t xtkey = 0;
                             const SDL_Scancode scancode = event.key.keysym.scancode;
+                            static unsigned lcd_keys_down = 0;
+
+                            if (machine_is_thinkpad_700() && scancode >= SDL_SCANCODE_F5 &&
+                                scancode <= SDL_SCANCODE_F9) {
+                                const unsigned bit = 1U << (scancode - SDL_SCANCODE_F5);
+                                const SDL_Keymod mods = event.key.keysym.mod;
+                                if ((lcd_keys_down & bit) ||
+                                    ((mods & KMOD_CTRL) && (mods & KMOD_SHIFT) &&
+                                     !(mods & (KMOD_ALT | KMOD_GUI)))) {
+                                    if (event.type == SDL_KEYDOWN) {
+                                        lcd_keys_down |= bit;
+                                        tp700_lcd_adjust(scancode - SDL_SCANCODE_F5);
+                                    } else
+                                        lcd_keys_down &= ~bit;
+                                    break;
+                                }
+                            }
 
                             /* Keep our own modifier state.  Some SDL/X11
                                layouts report the Ctrl modifier one event late

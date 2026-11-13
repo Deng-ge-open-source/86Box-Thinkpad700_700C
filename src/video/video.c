@@ -41,6 +41,7 @@
 #include <86box/ui.h>
 #include <86box/thread.h>
 #include <86box/video.h>
+#include <86box/vid_lcd.h>
 #include <86box/vid_svga.h>
 
 #include <minitrace/minitrace.h>
@@ -60,6 +61,8 @@ int          frames               = 0;
 int          fullchange           = 0;
 int          video_grayscale      = 0;
 int          video_graytype       = 0;
+int          tp700_lcd_brightness = 100;
+int          tp700_lcd_contrast   = 100;
 int          monitor_index_global = 0;
 uint32_t    *video_6to8           = NULL;
 uint32_t    *video_8togs          = NULL;
@@ -69,6 +72,23 @@ uint32_t    *video_16to32         = NULL;
 monitor_t          monitors[MONITORS_NUM];
 monitor_settings_t monitor_settings[MONITORS_NUM];
 atomic_bool        doresize_monitors[MONITORS_NUM];
+
+void
+tp700_lcd_adjust(int control)
+{
+    switch (control) {
+        case 0: tp700_lcd_brightness -= 10; break;
+        case 1: tp700_lcd_brightness += 10; break;
+        case 2: tp700_lcd_contrast -= 10; break;
+        case 3: tp700_lcd_contrast += 10; break;
+        case 4:
+            tp700_lcd_brightness = tp700_lcd_contrast = 100;
+            break;
+        default: return;
+    }
+    tp700_lcd_brightness = tp700_lcd_clamp(tp700_lcd_brightness, 10, 200);
+    tp700_lcd_contrast = tp700_lcd_clamp(tp700_lcd_contrast, 25, 200);
+}
 
 #ifdef _WIN32
 void * (*__cdecl video_copy)(void *_Dst, const void *_Src, size_t _Size) = memcpy;

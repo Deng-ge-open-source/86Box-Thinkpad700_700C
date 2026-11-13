@@ -27,6 +27,7 @@
 #include <86box/io.h>
 #include <86box/mem.h>
 #include <86box/timer.h>
+#include <86box/plat.h>
 #include <86box/video.h>
 #include <86box/vid_svga.h>
 #include "cpu.h"
@@ -65,6 +66,9 @@ io_t   *io_last[NPORTS];
 
 static uint64_t tp700_io_events = 0;
 static uint64_t tp700_kbc_events = 0;
+static uint32_t tp700_post_started;
+static uint32_t tp700_post_checkpoint_time;
+static uint8_t  tp700_post_checkpoint = 0xff;
 
 /*
  * The 9552 firmware begins its base-memory test at POST checkpoint 51h/52h
@@ -109,6 +113,7 @@ tp700_post_video_init(void)
         0x0c, 0x00, 0x0f, 0x08, 0x00
     };
     svga_t *svga = svga_get_pri();
+    const int color = !strcmp(machine_get_internal_name(), "ibmtp700c");
 
     if ((svga == NULL) || (svga->video_out == NULL))
         return;
@@ -120,10 +125,11 @@ tp700_post_video_init(void)
      * is guest video state: later BIOS/reference-disk mode sets replace it in
      * the normal way.
      */
-    svga->video_out(0x03c2, 0x67, svga->priv);
+    /* The 700C LCD uses eight-dot text cells; the 700 path uses nine. */
+    svga->video_out(0x03c2, color ? 0x63 : 0x67, svga->priv);
     for (uint8_t i = 0; i < 5; i++) {
         svga->video_out(0x03c4, i, svga->priv);
-        svga->video_out(0x03c5, seq[i], svga->priv);
+        svga->video_out(0x03c5, seq[i] | ((color && (i == 1)) ? 1 : 0), svga->priv);
     }
 
     svga->video_out(0x03d4, 0x11, svga->priv);
@@ -152,7 +158,7 @@ tp700_post_video_init(void)
 
     svga->dac_mask   = 0xff;
     svga->pallook[0] = 0x00000000;
-    svga->pallook[7] = 0x00c0c0c0;
+    svga->pallook[7] = color ? 0x00aaaaaa : 0x00c0c0c0;
     svga->pallook[15] = 0x00ffffff;
     svga->fullchange = changeframecount;
     svga_recalctimings(svga);
@@ -510,7 +516,7 @@ inb(uint16_t port)
 
     io_log("[%04X:%08X] (%i, %i, %04i) in b(%04X) = %02X\n", CS, cpu_state.pc, in_smm, found, qfound, port, ret);
 
-    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if (machine_is_thinkpad_700() &&
         ((tp700_io_events++ < 128) ||
          (port == 0x0092) || (port == 0x0094) || (port == 0x0096) ||
          ((port >= 0x00b0) && (port <= 0x00b2)) ||
@@ -578,7 +584,7 @@ outb(uint16_t port, uint8_t val)
 
     io_log("[%04X:%08X] (%i, %i, %04i) outb(%04X, %02X)\n", CS, cpu_state.pc, in_smm, found, qfound, port, val);
 
-    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if (machine_is_thinkpad_700() &&
         ((tp700_io_events++ < 128) ||
          (port == 0x0084) || (port == 0x008f) || (port == 0x0092) || (port == 0x0094) ||
          (port == 0x0096) || (port == 0x00e0) || (port == 0x00e2) ||
@@ -591,7 +597,7 @@ outb(uint16_t port, uint8_t val)
         pclog("TP700 I/O: %04X:%08X OUTB %04X <- %02X handled=%d\n",
               CS, cpu_state.pc, port, val, found);
 
-    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if (machine_is_thinkpad_700() &&
         (port == 0x0680) && ((val == 0xb0) || (val == 0xb9))) {
         const uint32_t save = ds + (ESI & 0xffff) + 0xb0;
 
@@ -606,8 +612,18 @@ outb(uint16_t port, uint8_t val)
               ram[ds + (ESI & 0xffff) + 0x39]);
     }
 
-    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if (machine_is_thinkpad_700() &&
         (port == 0x0680)) {
+        if (val != tp700_post_checkpoint) {
+            const uint32_t now = plat_get_ticks();
+            if (val == 0xa0)
+                tp700_post_started = tp700_post_checkpoint_time = now;
+            pclog("TP700 POST TIMING: cp=%02X elapsed_ms=%u previous_cp=%02X duration_ms=%u\n",
+                  val, now - tp700_post_started, tp700_post_checkpoint,
+                  now - tp700_post_checkpoint_time);
+            tp700_post_checkpoint = val;
+            tp700_post_checkpoint_time = now;
+        }
         /* A0h is the first 9552 power-on checkpoint.  Make the emulated LCD
            text path available before the ROM prints either the CP prefix or
            the memory count; initializing at 51h is already too late. */
@@ -635,7 +651,7 @@ outb(uint16_t port, uint8_t val)
 
     }
 
-    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if (machine_is_thinkpad_700() &&
         (port == 0x0680) && (val == 0xf0) &&
         (*(uint16_t *) &ram[0x0413] > 0x0280)) {
         /*
@@ -653,7 +669,7 @@ outb(uint16_t port, uint8_t val)
         pclog("TP700 BDA FIXUP: base=027F EBDA=9FC0\n");
     }
 
-    if (0 && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if (0 && machine_is_thinkpad_700() &&
         (port == 0x0680))
         pclog("TP700 BDA: checkpoint=%02X base=%04X EBDA=%04X "
               "F7801=%02X\n",

@@ -119,5 +119,6 @@ void dma_remove_sg(void);
 void dma_set_sg_base(uint8_t sg_base);
 
 extern int dma_channel_readable(int channel);
+extern int dma_ps2_get_channel(int arbitration_level);
 
 #endif /*EMU_DMA_H*/

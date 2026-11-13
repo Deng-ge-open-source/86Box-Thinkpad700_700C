@@ -570,6 +570,7 @@ extern const device_t tgui9680_pci_device;
 
 /* IBM PS/1 (S)VGA */
 extern const device_t ibm_ps1_2121_device;
+extern const device_t ibm_thinkpad700c_video_device;
 
 /* Trident TVGA 8900 */
 extern const device_t tvga8900_device;

@@ -2,325 +2,244 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Experimental IBM ThinkPad 700 (type 9552) emulation built on 86Box 6.0. This
-fork adds the machine, firmware-facing hardware behavior, IBM 486SLC support,
-MCA ESDI boot path, monochrome LCD presentation, and the input/display fixes
-needed to run the IBM Reference Diskette and a period operating system.
+Experimental IBM ThinkPad 700 and 700C (type 9552) emulation, based on
+**86Box 6.0, upstream commit `4fef696a4`**. This fork implements the planar,
+IBM 486SLC, MCA ESDI boot path and LCD behavior needed to use the original IBM
+Reference Diskette and period software.
 
-![86Box ThinkPad 700 emulation running inside a real ThinkPad 700](docs/images/thinkpad700-modernized-real-machine.jpg)
+![700C Reference Diskette, centered on its 640×480 color panel](docs/images/thinkpad700c-reference-proportions.png)
 
-This is the project's physical ThinkPad 700: the original vintage enclosure
-on the outside, modern hardware on the inside, and 86Box recreating the machine
-it once was. The emulation reproduces the real 700's firmware-visible behavior
-closely enough to complete POST, enter and use the IBM Reference Diskette,
-perform automatic configuration, boot from its MCA ESDI hard disk, and run
-period software in the genuine ThinkPad 700 shell. It brings the classic
-machine's appearance and operation back to life while giving its internals a
-modern, maintainable second life.
+The public repository provides source, configuration templates, tools and selected
+screenshots. **BIOS ROMs, Reference/Diagnostic Diskettes, operating systems and
+hard-disk images are not included.** Supply your own legally obtained files.
+Local runnable bundles belong in the ignored `private-dist/` directory.
 
-![Original IBM ThinkPad 700 PS/2 Reference Diskette 1.20 running on the recreated machine](docs/images/thinkpad700-original-reference-diskette.jpg)
+## Latest update — 2026-11-13
 
-This is the startup screen of the original IBM ThinkPad 700 PS/2 Reference
-Diskette, version 1.20, presented on the recreated machine just as it appears
-on a real 700. This factory configuration and diagnostic environment exercises
-the firmware paths that the project set out to preserve.
+- Independent 700C firmware identity, matching Reference Diskette and 256-color Windows support.
+- Correct LCD proportions and keyboard brightness/contrast, without on-screen controls.
+- Firmware/storage fixes, dated boot verification, and a reproducible private handoff with a new README.
 
-![ThinkPad 700 Reference Diskette](docs/images/thinkpad700-final-reference-disk.png)
+Details and verification limits are in [the update notes](docs/RELEASE-NOTES.md).
 
-> [!IMPORTANT]
-> This repository contains emulator source code only. IBM BIOS ROMs, Reference
-> Diskettes, diagnostics, operating systems, hard-disk images, and other
-> copyrighted software are **not** distributed here. Supply legally obtained
-> copies yourself. The local `local-assets/` directory is intentionally ignored
-> by Git.
+## Current status
 
-## Project status
-
-- Base: 86Box 6.0, upstream commit `4fef696a4`.
-- Machine exposed by the UI: `[MCA] IBM ThinkPad 700 (9552)`.
-- Internal machine name: `ibmtp700`.
-- Primary tested guest: IBM Reference Diskette 1.20 and a 640×480 period
-  Windows installation on a 370-cylinder MCA ESDI image.
-- Primary development host: Linux ARM64. The source remains portable and the
-  normal 86Box Windows and Linux build systems are retained.
-- Status: experimental. The ThinkPad 700 path is usable, but it has not yet
-  received upstream review and should not be treated as cycle-exact hardware
-  preservation.
-
-This is an independent community project. It is not affiliated with or
-endorsed by IBM, Lenovo, or the upstream 86Box project.
-
-## What was implemented
-
-The work is larger than a machine-table entry. The firmware exercises several
-PS/2- and ThinkPad-specific paths that previously did not exist in 86Box.
-
-### ThinkPad 700 planar and firmware
-
-- Added the IBM ThinkPad 700 / 9552 machine definition and the `ibmtp700`
-  runtime device.
-- Added the monochrome `F1EE` planar identity used by the 700. The preserved
-  `39G9996` image identifies the 700C (`F1EC`), so the emulator converts the six
-  planar-ID operands in its loaded copy and repairs the affected 64 KiB bank
-  checksums. The user's ROM file is never modified.
-- Added the machine-specific ROM shadow behavior and the correct 128 KiB high
-  ROM window at `FE0000h–FFFFFFh`, while retaining the full low shadow used by
-  POST.
-- Implemented the system-control, VPD/serial EEPROM, planar and storage status
-  registers queried by firmware and the Reference Diskette.
-
-### IBM 486SLC and memory behavior
-
-- Added IBM 486SLC/25 selection and ThinkPad-specific CPU configuration.
-- Implemented the SLC cache-control registers and the 16 KiB, four-way cache
-  tag behavior used by POST diagnostics.
-- Added interpreter and dynamic-recompiler handling for the firmware's control
-  register, stack, interrupt and return sequences.
-- Corrected 4 MiB onboard RAM plus expansion topology, the 16 MiB presence
-  state, reserved-memory mapping, NVRAM/EBDA values, DMA invalidation and warm
-  reset behavior.
-
-### MCA ESDI, system partition and boot
-
-- Extended the MCA ESDI controller with the command, geometry, status and
-  power-management behavior required by the 9552 firmware.
-- Added support for the 370-cylinder, 64-head, 32-sector geometry used by the
-  tested image.
-- Implemented the Reference Diskette to hard-disk hand-off and documented the
-  hidden 3 MiB system partition / IML requirement behind `I9990303`.
-- Added `tools/thinkpad700/patch_tp700_media.py`, which validates a local work
-  copy, restores only the reserved system-partition area when necessary, and
-  refuses unexpected media layouts. It does not contain IBM data.
-
-### Keyboard, mouse and floppy
-
-- Corrected 8042 command-parameter ordering and IRQ12 timing required by the
-  PS/2 pointing-device initialization.
-- Added the ThinkPad POST mouse negotiation behavior and reliable mouse release
-  handling.
-- Implemented the PS/2 floppy-controller power/status responses used by the
-  diagnostic and Reference Diskette paths.
-
-### LCD and host integration
-
-- Added a fixed 640×480 LCD presentation for the ThinkPad 700 path.
-- Centered 720×400 and 640×400 firmware/text modes without resizing the host
-  window, with safe horizontal margins for POST, PC DOS and Reference Diskette
-  text.
-- Added nearest-neighbor grayscale rendering, brightness/contrast/inversion
-  hooks, fullscreen handling, and a lightweight SDL software-texture path for
-  ARM64 hosts without useful GL acceleration.
-- Added optional JSON status output and the companion panel bridge under
-  `tools/thinkpad700/panel/` for a physical ThinkPad-style LED/control panel.
-
-### Verified firmware results
-
-The local test system completed POST, entered the Reference Diskette, performed
-automatic configuration, handed off to the hard disk and entered Windows. The
-implementation fixes the device/configuration causes of the observed `00160`,
-`00164`, `00169`, `00201`, `12902`, `08611`, `00191` and `I9990303` reports;
-it does not hide their strings or bypass the corresponding firmware tests.
-
-See [the detailed development record](docs/DEVELOPMENT-NOTES.zh-CN.md) for the
-original verification notes and [the upstream README](docs/UPSTREAM_README.md)
-for general 86Box information.
-
-## Repository layout
-
-```text
-src/                         86Box source plus ThinkPad 700 changes
-cmake/, CMakeLists.txt       upstream build system
-configs/thinkpad700/         redistributable configuration template
-docs/                        technical notes and selected screenshots
-scripts/                     local launch helpers
-tools/thinkpad700/           deterministic media and panel tools
-local-assets/                ignored local ROMs/media/runtime data
-build/                       ignored build output
-```
-
-`local-assets/` is deliberately excluded by `.gitignore`. On the original
-development machine it also holds historical research, locally owned media and
-the migrated runtime. None of it should be added with `git add -f` unless its
-license and redistribution rights have been checked independently.
-
-## Required user-supplied files
-
-At minimum, machine startup requires a legally obtained 256 KiB firmware dump
-at this ROM-relative path:
-
-```text
-roms/machines/ibmtp700/39G9996.bin
-```
-
-The filename and location matter because 86Box ROM paths are hardcoded. You
-will also need your own bootable floppy or disk image. For the fully verified
-Reference Diskette workflow, provide your own Reference Diskette image and a
-compatible ESDI hard-disk image containing the required IBM system partition.
-
-Do not run the media helper on your only copy. Work on copies and keep known
-hashes/backups of the originals.
-
-## Build on Linux
-
-The following Ubuntu/Debian packages match the official 86Box build guide:
-
-```bash
-sudo apt update
-sudo apt install build-essential cmake extra-cmake-modules pkg-config \
-  ninja-build libfreetype-dev libsdl2-dev libpng-dev libopenal-dev \
-  librtmidi-dev libfluidsynth-dev libsndfile1-dev libserialport-dev \
-  qtbase5-dev qtbase5-private-dev qttools5-dev libevdev-dev \
-  libxkbcommon-dev libxkbcommon-x11-dev libslirp-dev
-```
-
-Configure and build a normal x86-64 Linux release:
-
-```bash
-git clone https://github.com/Deng-ge-open-source/86Box-Thinkpad700_700C.git
-cd 86Box-Thinkpad700_700C
-cmake -S . -B build/linux -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/flags-gcc-x86_64.cmake
-cmake --build build/linux -j"$(nproc)"
-```
-
-For an ARM64 Linux host, enable the new recompiler and use the included ARM64
-toolchain preset:
-
-```bash
-cmake --preset flags-gcc-aarch64-regular
-cmake --build out/build/flags-gcc-aarch64-regular -j"$(nproc)"
-```
-
-The executable is normally under the selected build directory's `src/`
-subdirectory. If the preset is unsuitable for your distribution, configure a
-plain Ninja directory and add `-DNEW_DYNAREC=ON`.
-
-## Build on Windows
-
-The most reproducible native Windows route is an **MSYS2 UCRT64 or MINGW64**
-shell. Update MSYS2, then install the dependencies listed by the official 86Box
-build guide:
-
-```bash
-pacman -Syu
-pacman -S --needed git \
-  $MINGW_PACKAGE_PREFIX-ninja \
-  $MINGW_PACKAGE_PREFIX-cmake \
-  $MINGW_PACKAGE_PREFIX-gcc \
-  $MINGW_PACKAGE_PREFIX-pkgconf \
-  $MINGW_PACKAGE_PREFIX-openal \
-  $MINGW_PACKAGE_PREFIX-freetype \
-  $MINGW_PACKAGE_PREFIX-SDL2 \
-  $MINGW_PACKAGE_PREFIX-zlib \
-  $MINGW_PACKAGE_PREFIX-libpng \
-  $MINGW_PACKAGE_PREFIX-rtmidi \
-  $MINGW_PACKAGE_PREFIX-fluidsynth \
-  $MINGW_PACKAGE_PREFIX-libslirp \
-  $MINGW_PACKAGE_PREFIX-libsndfile \
-  $MINGW_PACKAGE_PREFIX-qt5-static \
-  $MINGW_PACKAGE_PREFIX-qt5-translations \
-  $MINGW_PACKAGE_PREFIX-vulkan-headers
-```
-
-Build from the same MSYS2 shell:
-
-```bash
-git clone https://github.com/Deng-ge-open-source/86Box-Thinkpad700_700C.git
-cd 86Box-Thinkpad700_700C
-cmake -S . -B build/windows -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build/windows -j"$(nproc)"
-```
-
-Locate `86Box.exe` below `build/windows/`. Keep the DLLs produced or installed
-by the MSYS2 build beside the executable when copying it to another machine.
-Windows on ARM requires the upstream LLVM/vcpkg ARM64 toolchain and Windows 11;
-that path is separate from the MSYS2 x86-64 build above.
-
-## Configure and run a VM
-
-You can import [`configs/thinkpad700/86box.cfg.example`](configs/thinkpad700/86box.cfg.example)
-or create the VM in the UI with these settings:
-
-| Setting | Value |
+| Area | Verified behavior |
 | --- | --- |
-| Machine | `[MCA] IBM ThinkPad 700 (9552)` |
-| CPU | IBM 486SLC/25 |
-| Memory | 4 MiB initially; 16 MiB is the tested maximum |
-| Video | Internal |
-| Mouse | PS/2 |
-| Storage controller | Integrated MCA ESDI |
-| Tested disk geometry | 370 cylinders, 64 heads, 32 sectors |
-| Floppy | 3.5-inch 1.44 MB |
+| ThinkPad 700 | F1EE monochrome model; Reference Diskette boot regression |
+| ThinkPad 700C | Independent F1EC model, original 39G9996 ROM identity and separate NVRAM |
+| Firmware | POST, automatic configuration, revision/identity pages and an empty system error log |
+| Storage | Integrated MCA ESDI; Reference Diskette → hard-disk hand-off |
+| Color Windows | Windows 3.2 standard mode, IBM VGA256C 1.20 driver, 640×480, 8-bit scanout, 512 KiB VRAM |
+| LCD | 4:3 fullscreen; centered 400-line text; full-height 480-line graphics |
+| Controls | Keyboard-only brightness/contrast, with no controls or overlays on the guest display |
+| Builds | Windows x64 Qt software and SDL builds; earlier 700 development on Linux ARM64 |
 
-Place the ROM tree either under the VM path or pass it explicitly:
+This remains an experimental community fork, without upstream review or claims of
+cycle-exact behavior. Enhanced-mode Windows driver behavior, extended graphics
+acceleration and the complete hardware diagnostic suite are **not yet verified**.
+See the dated [verification record](docs/VERIFICATION.md) and
+[change notes](docs/RELEASE-NOTES.md).
 
-```bash
-./build/linux/src/86Box -R /path/to/rom-root /path/to/vm/86box.cfg
-```
+## Choose the correct machine and media
 
-On Windows PowerShell the equivalent shape is:
+| Setting | ThinkPad 700 | ThinkPad 700C |
+| --- | --- | --- |
+| UI machine | [MCA] IBM ThinkPad 700 (9552) | [MCA] IBM ThinkPad 700C (9552) |
+| Internal name | `ibmtp700` | `ibmtp700c` |
+| Planar identity | F1EE | F1EC |
+| ROM-relative path | `machines/ibmtp700/39G9996.bin` | `machines/ibmtp700c/39G9996.bin` |
+| Reference Diskette 1.20 | `r700m120` | `r700c120` |
+| System programs | `$0007000.IML` | `$0009000.IML` |
+| Configuration | [700 template](configs/thinkpad700/86box.cfg.example) | [700C template](configs/thinkpad700c/86box.cfg.example) |
+
+The preserved 256 KiB `39G9996` dump belongs to the 700C. The 700C uses it
+unchanged; the 700 path converts the planar-ID operands and repairs checksums
+**in the loaded copy only**. It never modifies the user's ROM file.
+
+The 700C Reference Diskette contains `PF1EC.ADF`, `SF1EC.ADF` and
+`$0009000.IML`. Keep each model's writable media and NVRAM separate.
+Do not substitute the monochrome disk or run the 700-specific media patcher on
+700C media. The normal 86Box font ROM tree is also needed; the tested local
+bundle includes `video/mda/mda.rom` under the ROM root.
+
+### Set up and boot
+
+1. Copy the appropriate configuration template into a new VM folder as
+   `86box.cfg`.
+2. Supply a ROM root with the model-relative path shown above.
+3. In the VM configuration, set your working hard-disk and Reference Diskette
+   paths. The tested setup uses IBM 486SLC/25, 16 MiB RAM, internal video,
+   PS/2 mouse, integrated MCA ESDI and a 3.5-inch 1.44 MB floppy.
+4. Keep the correct Reference Diskette in drive A:. A cold start enters it
+   first; select **Start operating system** for the hard-disk hand-off.
+
+The tested disk geometry is **370 cylinders × 64 heads × 32 sectors**.
+The IBM hidden system partition and matching IML programs are required;
+an arbitrary DOS disk alone does not reproduce this boot path.
+
+For a fresh or converted 700C working disk, use the 700C Reference Diskette's
+**Backup/Restore system programs → Restore the system partition**, supplying
+the common 700/700C/720/720C Diagnostic Diskette when requested. Then run
+**Set configuration → Run automatic configuration**. Work on copies and keep
+the original images intact.
+
+Launch from PowerShell after building:
 
 ```powershell
-& .\build\windows\src\86Box.exe -R C:\path\to\rom-root C:\path\to\vm\86box.cfg
+& .\build\windows-700c\src\86Box.exe -F -R "C:\path\to\roms" -P "C:\path\to\ThinkPad 700C"
 ```
 
-The exact executable subdirectory can vary with the generator. The `rom-root`
-argument must contain `roms/machines/ibmtp700/39G9996.bin`.
-
-## Original development-machine launcher
-
-The migrated Linux workstation can still start the verified VM with:
+The equivalent Linux form is:
 
 ```bash
-./scripts/launch-thinkpad700.sh
+./build/linux/src/86Box -F -R /path/to/roms -P "/path/to/ThinkPad 700C"
 ```
 
-That launcher expects the ignored historical layout under
-`local-assets/legacy-work/`, validates/repairs only the local working copies,
-sets the ROM path and starts the existing ARM64 build. Override the local data
-location with `TP700_WORK_ROOT=/another/path` if needed.
+`-R` points directly to the ROM root containing `machines/` and `video/`;
+`-P` points to the VM folder containing `86box.cfg`.
 
-The optional media tool can be run separately:
+### Install the 700C Windows color driver
+
+The **700C120 VGA256C driver 1.20** is a different disk from the
+**R700C120 Reference Diskette**. IBM's
+[driver installation instructions](https://basterfield.com/pccbbs/mobiles/700c120.txt)
+require `VESA.COM` before Windows and the
+**640x480x256 Small fonts 512k IBMVGA256c** selection.
+
+The local Windows 3.2 standard-mode installation was checked for 640×480,
+8-bit scanout and 512 KiB VRAM. A generated 256-color bitmap was displayed
+in Paintbrush; Windows' reserved palette maps some input colors together.
+
+![Windows 3.2 on the 700C](docs/images/thinkpad700c-windows-color.png)
+
+![256-color test image in Paintbrush](docs/images/thinkpad700c-256-color-test.png)
+
+## Display and keyboard controls
+
+The 700C uses the guest VGA palette without grayscale or a monochrome tint.
+Its physical panel is represented as a fixed 640×480, 4:3 display.
+By default, 640×400 Reference Diskette text is centered with 40 unused panel
+rows above and below. True 640×480 Windows graphics fills the panel.
+
+To reproduce the optional expanded text mode, enable **LCD vertical expansion**
+in the 700C machine configuration (`lcd_vertical_expansion = 1`).
+The supplied template uses `0`, consistent with the default described in
+[IBM's Quick Reference](https://macdat.net/files/pdf/ibm/user_manuals/thinkpad_700_ps2_quick_reference.pdf).
+See also [IBM's original specifications](https://oldthinkpad.com/static/pdf/ibm-thinkpad700xps2.pdf).
+
+With the emulator focused, the Qt software renderer and SDL frontend support:
+
+| Shortcut | Action |
+| --- | --- |
+| Ctrl+Shift+F5 / F6 | Decrease / increase LCD brightness |
+| Ctrl+Shift+F7 / F8 | Decrease / increase LCD contrast |
+| Ctrl+Shift+F9 | Restore the original colors, brightness/contrast 100 |
+| Ctrl+End | Release the mouse |
+| Ctrl+Alt+Page Up | Toggle fullscreen in the SDL frontend |
+
+LCD adjustments affect guest RGB output only. There are no added controls,
+numbers or overlays on the guest screen, and host monitor settings are
+unaffected. The function keys in those combinations are consumed by the host.
+Settings are saved with the VM on normal exit. Other Qt renderers have not
+been verified for these controls; use the Qt software renderer for this setup.
+
+## Build
+
+The [official 86Box build guide](https://86box.readthedocs.io/en/stable/dev/buildguide.html)
+lists platform dependencies. This repository retains the upstream CMake build
+system. Firmware and guest media are not required to compile the emulator.
+
+### Windows x64
+
+Use an MSYS2 **UCRT64** shell with GCC, Ninja, CMake, Qt5 static, SDL2 and
+the dependencies listed in the build guide. The exact CI dependency list is in
+[the Windows release workflow](.github/workflows/windows_x64_release.yml).
 
 ```bash
-TP700_WORK_ROOT="$PWD/local-assets/legacy-work" \
-  python3 tools/thinkpad700/patch_tp700_media.py
+git clone https://github.com/Deng-ge-open-source/86Box-Thinkpad700_700C.git
+cd 86Box-Thinkpad700_700C
+cmake -S . -B build/windows-700c --preset regular \
+  --toolchain ./cmake/flags-gcc-x86_64.cmake \
+  -DNEW_DYNAREC=OFF -DQT=ON
+cmake --build build/windows-700c --parallel 4
 ```
 
-It intentionally fails on unexpected sizes, bytes, checksums or FAT layouts.
+The tested executable is `build/windows-700c/src/86Box.exe`.
+For the SDL frontend, configure another build directory with `-DQT=OFF`.
+Portable CI artifacts contain the emulator and public documentation, without
+ROMs or installed guests. Dynamic builds may also need their dependency DLLs.
 
-## Controls used by the verified Linux build
+### Linux
 
-- Click the guest display to capture the mouse.
-- `Ctrl+End` releases the mouse; the middle button is a fallback.
-- `Ctrl+Alt+Page Up` toggles fullscreen in the SDL frontend.
-- Exit fullscreen before using the host window close button.
-
-## Development workflow
-
-Keep all new source work in this repository. Generated builds, ROMs, VM state,
-disk images, logs and capture sequences belong in ignored directories. Before
-opening a pull request:
+Install your distribution's dependencies from the build guide, then:
 
 ```bash
-git diff --check
-cmake --build <your-build-directory> -j2
+cmake -S . -B build/linux --preset regular \
+  --toolchain ./cmake/flags-gcc-x86_64.cmake
+cmake --build build/linux --parallel 4
 ```
 
-Please describe which firmware path or hardware behavior a change implements,
-and include reproducible logs or compact selected screenshots rather than raw
-frame sequences.
+For Linux ARM64, use `cmake --preset flags-gcc-aarch64-regular` and build
+`out/build/flags-gcc-aarch64-regular`; this enables the new recompiler.
+The migrated 700 workstation can still use
+[`scripts/launch-thinkpad700.sh`](scripts/launch-thinkpad700.sh) with its
+ignored historical layout. That launcher and
+`tools/thinkpad700/patch_tp700_media.py` are specific to the monochrome 700.
+
+## Troubleshooting
+
+| Observation | Check |
+| --- | --- |
+| Long power-on memory count | The measured 16 MiB POST takes about 38 seconds overall, including about 32 seconds at CP52. These are firmware checkpoints, not error codes. CP67 passed in under a millisecond in the local test. |
+| Configuration or identity warning | Confirm F1EC/700C media and separate NVRAM; run the matching Reference Diskette configuration workflow. |
+| `I9990303` on hard-disk boot | Check the hidden IBM system partition and model-specific IML programs. |
+| Windows still uses 16 colors | Install the VGA256C driver and load `VESA.COM`; the Reference Diskette does not install the Windows driver. |
+| Text looks too tall | Keep LCD vertical expansion off; 400-line text should have unused rows above and below. |
+
+Normal builds no longer perform the diagnostic full-RAM IML signature scans in
+the CPU loop. Original POST tests remain enabled. A fresh empty system error
+log is initialized correctly; existing non-empty logs are preserved.
+
+![700C Reference Diskette reporting an empty error log](docs/images/thinkpad700c-error-log-empty.png)
+
+## Development and private handoff
+
+```text
+src/                         Emulator source and ThinkPad implementations
+configs/thinkpad700*/         Public configuration templates
+docs/                        Verification, technical notes and selected images
+scripts/                     Launch and private packaging helpers
+tools/thinkpad700/            Media, panel and validation tools
+local-assets/                Ignored local firmware, media, state and toolchains
+build/                       Ignored generated builds
+private-dist/                Ignored private runtime and handoff archives
+```
+
+Before handing off changes, run `git diff --check`, build the relevant target
+and boot the affected ThinkPad with local assets. The public-tree check and
+focused DMA regression are described in [the verification record](docs/VERIFICATION.md).
+Keep `README.md` and `README.zh-CN.md` synchronized.
+
+For an existing local 700C runtime, use
+[`scripts/package-private-thinkpad700c.ps1`](scripts/package-private-thinkpad700c.ps1)
+to create a new private handoff with a fresh README, source snapshot and
+checksums. The script copies an explicit file list and excludes logs, captures,
+credentials and toolchains. Its output stays under `private-dist/` and must
+not be uploaded to GitHub.
+
+## The physical 700 project
+
+![86Box running in the project's rebuilt ThinkPad 700 enclosure](docs/images/thinkpad700-modernized-real-machine.jpg)
+
+The original 700 enclosure houses modern hardware running the emulator.
+The earlier [restoration and firmware notes](docs/DEVELOPMENT-NOTES.zh-CN.md)
+document that work; the 700C path builds on the same emulated platform.
 
 ## License and attribution
 
-This fork retains the 86Box GNU GPL v2-or-later license and upstream notices;
-see [`COPYING`](COPYING) and [`AUTHORS`](AUTHORS). New contributions to this
-repository are distributed under the same license unless explicitly stated
-otherwise in the relevant file.
-
-Useful upstream references:
-
-- [86Box project](https://github.com/86Box/86Box)
-- [Official build guide](https://86box.readthedocs.io/en/stable/dev/buildguide.html)
-- [ROM search paths](https://86box.readthedocs.io/en/latest/usage/roms.html)
+GNU GPL v2 or later, retaining 86Box notices: [COPYING](COPYING),
+[AUTHORS](AUTHORS), [upstream README](docs/UPSTREAM_README.md) and
+[86Box](https://github.com/86Box/86Box).
+This is an independent community project, unaffiliated with IBM, Lenovo or
+the upstream 86Box project.

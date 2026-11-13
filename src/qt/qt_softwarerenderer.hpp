@@ -2,6 +2,7 @@
 #define SOFTWARERENDERER_HPP
 
 #include <QWidget>
+#include <QImage>
 #include <QWindow>
 #include <QPaintDevice>
 #include <QScopedPointer>
@@ -33,6 +34,10 @@ public slots:
 protected:
     std::array<std::unique_ptr<QImage>, 2> images;
     int                                    cur_image = -1;
+    QImage                                 lcdImage;
+    std::array<uint8_t, 256>                lcdLut;
+    int                                    lcdBrightness = -1;
+    int                                    lcdContrast = -1;
 
     void onPaint(QPaintDevice *device);
     void resizeEvent(QResizeEvent *event) override;

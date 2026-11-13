@@ -531,7 +531,7 @@ fail_raw:
              * a generic 702/16/63 wrapper, while its IBM partition table and
              * ESDI boot code correctly describe the original 345/64/32 disk.
              */
-            if (strcmp(machine_get_internal_name(), "ibmtp700") ||
+            if (!machine_is_thinkpad_700() ||
                 (hdd[id].bus_type != HDD_BUS_ESDI) || !hdd[id].tracks ||
                 !hdd[id].hpc || !hdd[id].spt) {
                 hdd[id].tracks = hdd_images[id].vhd->footer.geom.cyl;

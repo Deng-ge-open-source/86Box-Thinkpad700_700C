@@ -391,7 +391,7 @@ void
 resetx86(void)
 {
     tp700_hdd_os_active = 0;
-    if (!strcmp(machine_get_internal_name(), "ibmtp700"))
+    if (machine_is_thinkpad_700())
         tp700_int13_reset_state();
     reset_common(1);
 
@@ -408,7 +408,7 @@ tp700_boot_hdd(void)
     uint8_t boot_sector[512];
     uint16_t entry;
 
-    if (strcmp(machine_get_internal_name(), "ibmtp700") ||
+    if (!machine_is_thinkpad_700() ||
         !hdd_is_valid(0) || hdd_image_read(0, 0, 1, boot_sector))
         return 0;
 
@@ -472,7 +472,7 @@ tp700_boot_hdd_post(void)
 {
     uint8_t boot_sector[512];
 
-    if (strcmp(machine_get_internal_name(), "ibmtp700") ||
+    if (!machine_is_thinkpad_700() ||
         !hdd_is_valid(0) || hdd_image_read(0, 0, 1, boot_sector))
         return 0;
 
@@ -505,7 +505,7 @@ softresetx86(void)
     if (soft_reset_mask)
         return;
 
-    if (!strcmp(machine_get_internal_name(), "ibmtp700"))
+    if (machine_is_thinkpad_700())
         pclog("TP700 SOFT RESET: from=%04X:%04X warm=%04X hdd=%d count=%u\n",
               CS, (uint16_t) cpu_state.pc, warm_start, hdd_is_valid(0),
               ram[0x475]);
@@ -528,7 +528,7 @@ softresetx86(void)
      * shadow in their run-time state, so the ROM repeatedly re-enters its
      * shutdown dispatch instead of performing POST.
      */
-    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if (machine_is_thinkpad_700() &&
         (warm_start == 0x0000)) {
         uint8_t shutdown;
 
@@ -556,7 +556,7 @@ softresetx86(void)
 void
 hardresetx86(void)
 {
-    if (!strcmp(machine_get_internal_name(), "ibmtp700"))
+    if (machine_is_thinkpad_700())
         machine_thinkpad_700_reset_shadow();
 
     dma_reset();

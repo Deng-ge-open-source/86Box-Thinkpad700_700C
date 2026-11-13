@@ -262,7 +262,7 @@ exec386_2386(int32_t cycs)
             cpu_state.op32  = use32;
 
 #ifndef NDEBUG
-            if (!strcmp(machine_get_internal_name(), "ibmtp700")) {
+            if (machine_is_thinkpad_700()) {
                 const uint16_t base = *(uint16_t *) &ram[0x0413];
                 const uint16_t ebda = *(uint16_t *) &ram[0x040e];
                 const uint8_t  f7801 = ram[0xf7801];
@@ -288,7 +288,7 @@ exec386_2386(int32_t cycs)
 
             fetchdat = fastreadl_fetch(cs + cpu_state.pc);
             if ((tp700_hdd_boot_pending == 2) &&
-                !strcmp(machine_get_internal_name(), "ibmtp700") &&
+                machine_is_thinkpad_700() &&
                 (((cs + cpu_state.pc) == 0x000f29dd) ||
                  ((cs + cpu_state.pc) == 0x00007c00))) {
                 pclog("TP700 BOOT HANDOFF: committing HDD MBR after "
@@ -296,7 +296,7 @@ exec386_2386(int32_t cycs)
                 tp700_boot_hdd_post();
                 fetchdat = fastreadl_fetch(cs + cpu_state.pc);
             }
-            if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+            if (machine_is_thinkpad_700() &&
                 ((cs + cpu_state.pc == 0x000fd0ed) ||
                  (cs + cpu_state.pc == 0x000fd10e) ||
                  (cs + cpu_state.pc == 0x000f1669))) {
@@ -314,7 +314,7 @@ exec386_2386(int32_t cycs)
                       readmeml(ss, (BP + 8) & 0xffff));
             }
 #ifndef NDEBUG
-            if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+            if (machine_is_thinkpad_700() &&
                 (CS == 0xf000) &&
                 ((cpu_state.pc == 0x6d02) || (cpu_state.pc == 0x6d14) ||
                  (cpu_state.pc == 0x6987)) &&
@@ -333,7 +333,7 @@ exec386_2386(int32_t cycs)
                       *(uint16_t *) &ram[stack + 8],
                       *(uint16_t *) &ram[stack + 10]);
             }
-            if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+            if (machine_is_thinkpad_700() &&
                 (CS == 0xf000) && (cpu_state.pc == 0xaf5f) &&
                 (tp700_halt_traces++ < 4)) {
                 const uint32_t state_addr = ds + (ESI & 0xffff) + 1;
@@ -346,7 +346,7 @@ exec386_2386(int32_t cycs)
                       ram[stack], ram[stack + 1], ram[stack + 2], ram[stack + 3]);
             }
             ++tp700_trace_instructions;
-            if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+            if (machine_is_thinkpad_700() &&
                 ((tp700_trace_instructions <= 256) ||
                  ((tp700_trace_instructions & 0x0000ffff) == 0))) {
                 pclog("TP700 TRACE: ins=%llu CS:IP=%04X:%08X phys=%08X op=%08X "

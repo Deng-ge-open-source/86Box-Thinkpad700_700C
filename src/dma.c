@@ -58,6 +58,7 @@ static struct dma_ps2_t {
     int byte_ptr;
 
     int is_ps2;
+    uint8_t arb_assigned;
 } dma_ps2;
 
 #define DMA_PS2_IOA            (1 << 0)
@@ -776,6 +777,7 @@ dma_ps2_write(uint16_t addr, uint8_t val, UNUSED(void *priv))
 
                 case 8: /*Arbitration Level*/
                     dma_c->arb_level = val;
+                    dma_ps2.arb_assigned |= 1 << dma_ps2.xfr_channel;
                     break;
 
                 case 9: /*Set DMA mask*/
@@ -1129,6 +1131,8 @@ void
 dma_reset(void)
 {
     int c;
+
+    dma_ps2.arb_assigned = 0;
 
     dma_wp[0] = dma_wp[1] = 0;
     dma_m                 = 0;
@@ -1872,6 +1876,31 @@ int
 dma_mode(int channel)
 {
     return (dma[channel].mode);
+}
+
+/* MCA adapters select an arbitration level, while the PS/2 DMA controller
+   lets firmware assign that level to any of its eight transfer channels. */
+int
+dma_ps2_get_channel(int arbitration_level)
+{
+    int matched = -1;
+
+    if (dma_ps2.is_ps2) {
+        for (int channel = 0; channel < 8; channel++) {
+            if (!(dma_ps2.arb_assigned & (1 << channel)) ||
+                (dma[channel].arb_level != arbitration_level))
+                continue;
+            if (matched < 0)
+                matched = channel;
+            if ((dma_e & (1 << channel)) && !(dma_m & (1 << channel)))
+                return channel;
+        }
+    }
+
+    /* Preserve software which programs the legacy 8237-compatible ports
+       without assigning a separate PS/2 arbitration level. */
+    return matched >= 0 ? matched :
+           ((arbitration_level >= 0 && arbitration_level < 8) ? arbitration_level : -1);
 }
 
 /* DMA Bus Master Page Read/Write */

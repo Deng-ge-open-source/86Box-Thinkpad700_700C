@@ -76,9 +76,12 @@ typedef struct {
     uint8_t banking;
     uint8_t reg_2100;
     uint8_t reg_210a;
+    uint8_t indexed_regs[256];
+    int integrated;
 } tivga_t;
 
 static video_timings_t timing_ti_cf62011 = { .type = VIDEO_ISA, .write_b = 6, .write_w = 8, .write_l = 16, .read_b = 6, .read_w = 8, .read_l = 16 };
+static video_timings_t timing_thinkpad700c = { .type = VIDEO_MCA, .write_b = 6, .write_w = 8, .write_l = 16, .read_b = 6, .read_w = 8, .read_l = 16 };
 
 static void
 vid_out(uint16_t addr, uint8_t val, void *priv)
@@ -120,6 +123,8 @@ vid_out(uint16_t addr, uint8_t val, void *priv)
 
         case 0x2100:
             ti->reg_2100 = val;
+            if (ti->integrated)
+                svga->packed_chain4 = ((val & 7) >= 4);
             if ((val & 7) < 4)
                 svga->read_bank = svga->write_bank = 0;
             else
@@ -134,6 +139,11 @@ vid_out(uint16_t addr, uint8_t val, void *priv)
 
         case 0x210a:
             ti->reg_210a = val;
+            break;
+
+        case 0x210c:
+            if (ti->integrated)
+                ti->indexed_regs[ti->reg_210a] = val;
             break;
 
         default:
@@ -180,7 +190,9 @@ vid_in(uint16_t addr, void *priv)
             break;
 
         case 0x2100:
-            ret = ti->reg_2100;
+            /* VGA256C has no operation-mode bit 1.  The IBM VESA TSR
+               probes this by writing 07h and expecting 05h back. */
+            ret = ti->integrated ? (ti->reg_2100 & ~2) : ti->reg_2100;
             break;
 
         case 0x2108:
@@ -189,6 +201,10 @@ vid_in(uint16_t addr, void *priv)
 
         case 0x210a:
             ret = ti->reg_210a;
+            break;
+
+        case 0x210c:
+            ret = ti->integrated ? ti->indexed_regs[ti->reg_210a] : 0xff;
             break;
 
         default:
@@ -232,6 +248,7 @@ vid_init(const device_t *info)
 
     /* Allocate control block and initialize. */
     ti = (tivga_t *) calloc(1, sizeof(tivga_t));
+    ti->integrated = !!(info->flags & DEVICE_MCA);
 
     /* Set amount of VRAM in KB. */
     if (info->local == 0)
@@ -239,13 +256,17 @@ vid_init(const device_t *info)
     else
         ti->vram_size = info->local;
 
-    video_inform(VIDEO_FLAG_TYPE_SPECIAL, &timing_ti_cf62011);
+    video_inform(VIDEO_FLAG_TYPE_SPECIAL, (info->flags & DEVICE_MCA)
+                 ? &timing_thinkpad700c : &timing_ti_cf62011);
 
     svga_init(info, &ti->svga, ti,
               ti->vram_size << 10,
               NULL, vid_in, vid_out, NULL, NULL);
 
-    io_sethandler(0x0100, 2, vid_in, NULL, NULL, NULL, NULL, NULL, ti);
+    /* The 700C's integrated adapter is described by the F1EC planar POS;
+       do not overlay the PS/1 E8FE identity on that register pair. */
+    if (!(info->flags & DEVICE_MCA))
+        io_sethandler(0x0100, 2, vid_in, NULL, NULL, NULL, NULL, NULL, ti);
     io_sethandler(0x03c0, 32, vid_in, NULL, NULL, vid_out, NULL, NULL, ti);
     io_sethandler(0x2100, 16, vid_in, NULL, NULL, vid_out, NULL, NULL, ti);
 
@@ -259,6 +280,20 @@ const device_t ibm_ps1_2121_device = {
     .name          = "IBM PS/1 Model 2121 SVGA",
     .internal_name = "ibm_ps1_2121",
     .flags         = DEVICE_ISA,
+    .local         = 512,
+    .init          = vid_init,
+    .close         = vid_close,
+    .reset         = NULL,
+    .available     = NULL,
+    .speed_changed = vid_speed_changed,
+    .force_redraw  = vid_force_redraw,
+    .config        = NULL
+};
+
+const device_t ibm_thinkpad700c_video_device = {
+    .name          = "IBM ThinkPad 700C VGA256C",
+    .internal_name = "ibmtp700c_vga",
+    .flags         = DEVICE_MCA,
     .local         = 512,
     .init          = vid_init,
     .close         = vid_close,

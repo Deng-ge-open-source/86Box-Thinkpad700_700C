@@ -156,6 +156,22 @@ typedef struct esdi_t {
     uint8_t pos_regs[8];
 } esdi_t;
 
+static int
+esdi_dma_read(const esdi_t *dev)
+{
+    const int channel = dma_ps2_get_channel(dev->dma);
+
+    return channel < 0 ? DMA_NODATA : dma_channel_read(channel);
+}
+
+static int
+esdi_dma_write(const esdi_t *dev, uint16_t value)
+{
+    const int channel = dma_ps2_get_channel(dev->dma);
+
+    return channel < 0 ? DMA_NODATA : dma_channel_write(channel, value);
+}
+
 static uint8_t
 esdi_bios_read(uint32_t addr, void *priv)
 {
@@ -640,7 +656,7 @@ esdi_callback(void *priv)
                         }
 
                         while (dev->data_pos < 256) {
-                            val = dma_channel_write(dev->dma, dev->data[dev->data_pos]);
+                            val = esdi_dma_write(dev, dev->data[dev->data_pos]);
 
                             if (val == DMA_NODATA) {
                                 esdi_mca_set_callback(dev, ESDI_TIME + cmd_time);
@@ -713,7 +729,7 @@ esdi_callback(void *priv)
 
                     while (dev->sector_pos < dev->sector_count) {
                         while (dev->data_pos < 256) {
-                            val = dma_channel_read(dev->dma);
+                            val = esdi_dma_read(dev);
 
                             if (val == DMA_NODATA) {
                                 esdi_mca_set_callback(dev, ESDI_TIME + cmd_time);
@@ -978,7 +994,7 @@ esdi_callback(void *priv)
                     }
                     while (dev->sector_pos < dev->sector_count) {
                         while (dev->data_pos < 256) {
-                            val = dma_channel_read(dev->dma);
+                            val = esdi_dma_read(dev);
 
                             if (val == DMA_NODATA) {
                                 esdi_mca_set_callback(dev, ESDI_TIME);
@@ -1039,9 +1055,9 @@ esdi_callback(void *priv)
 
                     while (dev->sector_pos < dev->sector_count) {
                         if (!dev->data_pos)
-                            memcpy(dev->data, dev->sector_buffer[dev->sector_pos++], 512);
+                            memcpy(dev->data, dev->sector_buffer[dev->sector_pos], 512);
                         while (dev->data_pos < 256) {
-                            val = dma_channel_write(dev->dma, dev->data[dev->data_pos]);
+                            val = esdi_dma_write(dev, dev->data[dev->data_pos]);
 
                             if (val == DMA_NODATA) {
                                 esdi_mca_set_callback(dev, ESDI_TIME);
@@ -1052,6 +1068,7 @@ esdi_callback(void *priv)
                         }
 
                         dev->data_pos = 0;
+                        dev->sector_pos++;
                     }
 
                     dev->status    = STATUS_CMD_IN_PROGRESS;
@@ -1529,32 +1546,9 @@ esdi_mca_write(const uint16_t port, uint8_t val, void *priv)
                      esdi_write, esdi_writew, NULL, dev);
     mem_mapping_disable(&dev->bios_rom.mapping);
 
-    switch (dev->pos_regs[2] & 0x3c) {
-        case 0x14:
-            dev->dma = 5;
-            break;
-        case 0x18:
-            dev->dma = 6;
-            break;
-        case 0x1c:
-            dev->dma = 7;
-            break;
-        case 0x00:
-            dev->dma = 0;
-            break;
-        case 0x04:
-            dev->dma = 1;
-            break;
-        case 0x0c:
-            dev->dma = 3;
-            break;
-        case 0x10:
-            dev->dma = 4;
-            break;
-
-        default:
-            break;
-    }
+    /* POS bits 2..5 encode the MCA arbitration level, including E on the
+       700C.  Resolve it to a PS/2 transfer channel at DMA time. */
+    dev->dma = (dev->pos_regs[2] >> 2) & 0x0f;
 
     if (!(dev->pos_regs[3] & 8)) {
         switch (dev->pos_regs[3] & 7) {
@@ -1699,7 +1693,7 @@ esdi_init(UNUSED(const device_t *info))
     } else {
         dev->pos_regs[0] = 0x9f;
         dev->pos_regs[1] = 0xdf;
-        if (!strcmp(machine_get_internal_name(), "ibmtp700")) {
+        if (machine_is_thinkpad_700()) {
             /* @DF9F factory defaults on the 9552 planar. */
             dev->pos_regs[2] = 0x55; /* enabled, primary I/O, DMA 5 */
             dev->pos_regs[3] = 0x20; /* 24 us DMA burst pacing */
@@ -1723,7 +1717,7 @@ esdi_init(UNUSED(const device_t *info))
 
         /* The planar controller is already live before a system partition
            exists, so install its I/O handler from the power-on POS value. */
-        if (!strcmp(machine_get_internal_name(), "ibmtp700"))
+        if (machine_is_thinkpad_700())
             esdi_mca_write(0x0102, dev->pos_regs[2], dev);
     } else
         mca_add(esdi_mca_read, esdi_mca_write, esdi_mca_feedb, NULL, dev);

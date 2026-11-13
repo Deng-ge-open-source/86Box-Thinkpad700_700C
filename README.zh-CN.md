@@ -2,286 +2,222 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-这是一个基于 86Box 6.0 的实验性 IBM ThinkPad 700（9552 型）模拟项目。该分支增加了
-ThinkPad 700 机型、固件可见的硬件行为、IBM 486SLC、MCA ESDI 启动链、单色 LCD
-显示，以及运行 IBM 参考盘和同时代操作系统所需的输入与显示修复。
+基于 **86Box 6.0，上游提交 `4fef696a4`** 的实验性 IBM ThinkPad 700 / 700C
+（9552 型）模拟项目。本分支实现系统板、IBM 486SLC、MCA ESDI 启动链和 LCD 行为，
+用于运行 IBM 原版参考盘及同时代软件。
 
-![在真正的 ThinkPad 700 中运行的 86Box ThinkPad 700 模拟环境](docs/images/thinkpad700-modernized-real-machine.jpg)
+![700C 参考盘在 640×480 彩色面板中居中显示](docs/images/thinkpad700c-reference-proportions.png)
 
-这就是本项目的实体 ThinkPad 700：外表保留经典原机外壳，内部换上现代
-硬件，再由 86Box 重现它曾经的硬件与固件行为。它能像真实的 700 一样完成
-POST、进入并操作 IBM 参考盘、执行自动配置、从 MCA ESDI 硬盘启动，并在真正的
-ThinkPad 700 机身中运行同时代软件。它既保留了老机器的外观与操作体验，又让
-内在拥有了现代、易于维护的第二次生命。
+公开仓库提供源码、配置模板、工具和精选截图，**不包含 BIOS ROM、参考盘、诊断盘、
+操作系统或硬盘镜像**，请自行提供合法取得的文件。本地可运行整合包保存在 Git 忽略的
+`private-dist/` 中。
 
-![在复刻机上运行的 IBM ThinkPad 700 PS/2 原版参考盘 1.20](docs/images/thinkpad700-original-reference-diskette.jpg)
+## 本次更新 — 2026-11-13
 
-这是 IBM ThinkPad 700 PS/2 原版参考盘 1.20 的启动画面，在这台复刻机上呈现出它
-在真实 700 上运行时的样子。这套原厂配置与诊断环境会实际调用本项目希望保存的
-各条固件路径。
+- 700C 独立固件身份、对应参考盘和 256 色 Windows 支持。
+- 修正 LCD 画面比例，使用纯键盘调节亮度/对比度，不增加屏幕控件。
+- 固件/存储修复、带日期的启动验证，以及带全新 README 的可复现私人交接包。
 
-![ThinkPad 700 参考盘](docs/images/thinkpad700-final-reference-disk.png)
+具体修改与验证边界见[更新记录](docs/RELEASE-NOTES.md)。
 
-> [!IMPORTANT]
-> 本仓库只发布模拟器源代码，不发布 IBM BIOS ROM、参考盘、诊断盘、操作系统、硬盘
-> 镜像或其他受版权保护的软件。请自行提供合法取得的副本。本机的 `local-assets/`
-> 目录已被 Git 完整忽略。
+## 当前状态
 
-## 项目状态
-
-- 基线：86Box 6.0，上游提交 `4fef696a4`。
-- 界面中的机型：`[MCA] IBM ThinkPad 700 (9552)`。
-- 内部机型名：`ibmtp700`。
-- 主要验证环境：IBM 参考盘 1.20，以及位于 370 柱面 MCA ESDI 镜像上的
-  640×480 同时代 Windows 系统。
-- 主要开发宿主：Linux ARM64；源代码仍保留 86Box 原有的 Windows 和 Linux
-  跨平台构建方式。
-- 当前属于实验性实现，尚未经过 86Box 上游审查，不应被视为周期级精确的硬件保存。
-
-这是独立社区项目，与 IBM、Lenovo 或 86Box 上游项目不存在隶属或官方认可关系。
-
-## 我们实现了什么
-
-这次修改远不只是增加一项机型表。ThinkPad 固件会访问多条此前在 86Box 中不存在的
-PS/2 与便携机专用硬件路径。
-
-### ThinkPad 700 系统板与固件
-
-- 增加 IBM ThinkPad 700 / 9552 机型和 `ibmtp700` 运行设备。
-- 增加 700 单色机型使用的 `F1EE` Planar ID。现存的 `39G9996` 固件镜像属于
-  700C（`F1EC`）；模拟器只在加载后的内存副本中转换六处 Planar ID 操作数，并修复
-  受影响的两个 64 KiB 分区校验和，不修改用户的 ROM 文件。
-- 实现该机型独有的 ROM shadow，以及位于 `FE0000h–FFFFFFh` 的正确 128 KiB
-  高位 ROM 窗口，同时保留 POST 使用的完整低位 shadow。
-- 实现固件与参考盘会查询的系统控制、VPD/串行 EEPROM、Planar 和存储状态寄存器。
-
-### IBM 486SLC 与内存
-
-- 增加 IBM 486SLC/25 选择与 ThinkPad 专用 CPU 配置。
-- 实现 SLC 缓存控制寄存器，以及 POST 诊断使用的 16 KiB、四路组相联缓存标签行为。
-- 在解释器和动态重编译器中补齐固件依赖的控制寄存器、堆栈、中断和返回指令路径。
-- 修正 4 MiB 板载内存、扩展卡拓扑、16 MiB 存在位、保留区映射、NVRAM/EBDA、
-  DMA 失效与热启动行为。
-
-### MCA ESDI、系统分区与启动
-
-- 扩展 MCA ESDI 控制器，加入 9552 固件需要的命令、几何参数、状态与电源管理行为。
-- 支持实测镜像使用的 370 柱面、64 磁头、32 扇区几何参数。
-- 实现参考盘到硬盘的启动交接，并记录导致 `I9990303` 的隐藏 3 MiB 系统分区与
-  IML 要求。
-- 增加 `tools/thinkpad700/patch_tp700_media.py`：它只处理本地工作副本，校验介质，
-  必要时只恢复保留系统区，并在遇到非预期布局时拒绝继续。脚本本身不含 IBM 数据。
-
-### 键盘、鼠标与软驱
-
-- 修复 PS/2 指点设备初始化需要的 8042 命令参数提交顺序和 IRQ12 时序。
-- 增加 ThinkPad POST 鼠标协商行为，并实现可靠的宿主鼠标释放。
-- 实现诊断盘与参考盘会读取的 PS/2 软驱控制器电源/状态响应。
-
-### LCD 与宿主集成
-
-- 为 ThinkPad 700 路径增加固定 640×480 LCD 显示区域。
-- 将 720×400 和 640×400 的固件/文本模式居中显示而不改变宿主窗口大小，并为
-  POST、PC DOS 和参考盘文字保留安全边距。
-- 增加最近邻灰阶、亮度、对比度、反色、全屏处理，以及面向无可用 GL 加速 ARM64
-  宿主的轻量 SDL 软件贴图路径。
-- 增加可选 JSON 状态输出，以及 `tools/thinkpad700/panel/` 下的实体 ThinkPad 风格
-  LED/控制面板桥接程序。
-
-### 已验证的固件结果
-
-本地测试机已完成 POST、进入参考盘、完成自动配置、交接到硬盘并进入 Windows。
-当前实现修复了导致 `00160`、`00164`、`00169`、`00201`、`12902`、`08611`、
-`00191` 与 `I9990303` 的设备或配置问题；没有隐藏错误文字，也没有跳过对应的固件
-检测。
-
-原始验证细节见[开发记录](docs/DEVELOPMENT-NOTES.zh-CN.md)，通用 86Box 介绍见
-[上游 README](docs/UPSTREAM_README.md)。
-
-## 仓库结构
-
-```text
-src/                         86Box 源码与 ThinkPad 700 修改
-cmake/, CMakeLists.txt       上游构建系统
-configs/thinkpad700/         可公开的配置模板
-docs/                        技术记录与精选截图
-scripts/                     本地启动辅助脚本
-tools/thinkpad700/           介质校验/修复与面板工具
-local-assets/                被忽略的本地 ROM、介质和运行数据
-build/                       被忽略的构建产物
-```
-
-`.gitignore` 会完整排除 `local-assets/`。原开发机上，该目录还保存迁移后的研究资料、
-本地合法持有的介质和可运行环境。在单独确认许可证和再分发权之前，不要使用
-`git add -f` 把其中内容加入提交。
-
-## 需要用户自行提供的文件
-
-机型启动至少需要合法取得的 256 KiB 固件镜像，并按以下 ROM 相对路径保存：
-
-```text
-roms/machines/ibmtp700/39G9996.bin
-```
-
-文件名与目录不可随意修改，因为 86Box 在代码中定义了 ROM 路径。你还需要自行提供
-可启动软盘或硬盘镜像。若要复现实测参考盘流程，需要自己的参考盘镜像，以及含 IBM
-系统分区的兼容 ESDI 硬盘镜像。
-
-不要在唯一的原始介质上运行补丁工具。应使用副本，并保存原始文件的哈希和备份。
-
-## 在 Linux 上构建
-
-Ubuntu/Debian 可按 86Box 官方构建指南安装依赖：
-
-```bash
-sudo apt update
-sudo apt install build-essential cmake extra-cmake-modules pkg-config \
-  ninja-build libfreetype-dev libsdl2-dev libpng-dev libopenal-dev \
-  librtmidi-dev libfluidsynth-dev libsndfile1-dev libserialport-dev \
-  qtbase5-dev qtbase5-private-dev qttools5-dev libevdev-dev \
-  libxkbcommon-dev libxkbcommon-x11-dev libslirp-dev
-```
-
-普通 x86-64 Linux 构建：
-
-```bash
-git clone https://github.com/Deng-ge-open-source/86Box-Thinkpad700_700C.git
-cd 86Box-Thinkpad700_700C
-cmake -S . -B build/linux -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/flags-gcc-x86_64.cmake
-cmake --build build/linux -j"$(nproc)"
-```
-
-ARM64 Linux 宿主应启用新动态重编译器，可使用仓库自带预设：
-
-```bash
-cmake --preset flags-gcc-aarch64-regular
-cmake --build out/build/flags-gcc-aarch64-regular -j"$(nproc)"
-```
-
-可执行文件通常位于相应构建目录的 `src/` 子目录。如果该预设不适合你的发行版，可
-自行创建 Ninja 构建目录，并加入 `-DNEW_DYNAREC=ON`。
-
-## 在 Windows 上构建
-
-推荐在 **MSYS2 UCRT64 或 MINGW64** 终端中构建。先更新 MSYS2，再安装 86Box
-官方构建指南列出的依赖：
-
-```bash
-pacman -Syu
-pacman -S --needed git \
-  $MINGW_PACKAGE_PREFIX-ninja \
-  $MINGW_PACKAGE_PREFIX-cmake \
-  $MINGW_PACKAGE_PREFIX-gcc \
-  $MINGW_PACKAGE_PREFIX-pkgconf \
-  $MINGW_PACKAGE_PREFIX-openal \
-  $MINGW_PACKAGE_PREFIX-freetype \
-  $MINGW_PACKAGE_PREFIX-SDL2 \
-  $MINGW_PACKAGE_PREFIX-zlib \
-  $MINGW_PACKAGE_PREFIX-libpng \
-  $MINGW_PACKAGE_PREFIX-rtmidi \
-  $MINGW_PACKAGE_PREFIX-fluidsynth \
-  $MINGW_PACKAGE_PREFIX-libslirp \
-  $MINGW_PACKAGE_PREFIX-libsndfile \
-  $MINGW_PACKAGE_PREFIX-qt5-static \
-  $MINGW_PACKAGE_PREFIX-qt5-translations \
-  $MINGW_PACKAGE_PREFIX-vulkan-headers
-```
-
-在同一个 MSYS2 终端中构建：
-
-```bash
-git clone https://github.com/Deng-ge-open-source/86Box-Thinkpad700_700C.git
-cd 86Box-Thinkpad700_700C
-cmake -S . -B build/windows -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build/windows -j"$(nproc)"
-```
-
-完成后在 `build/windows/` 内查找 `86Box.exe`。把程序复制到其他 Windows 电脑时，
-需要同时保留构建生成或 MSYS2 安装的运行库 DLL。Windows ARM64 需要上游的
-LLVM/vcpkg ARM64 工具链和 Windows 11，与上述 MSYS2 x86-64 流程不同。
-
-## 配置并启动虚拟机
-
-可以导入 [`configs/thinkpad700/86box.cfg.example`](configs/thinkpad700/86box.cfg.example)，
-也可以在图形界面中按下表创建：
-
-| 设置 | 值 |
+| 项目 | 已验证行为 |
 | --- | --- |
-| 机型 | `[MCA] IBM ThinkPad 700 (9552)` |
-| CPU | IBM 486SLC/25 |
-| 内存 | 建议先用 4 MiB；已验证最大值为 16 MiB |
-| 显示 | Internal |
-| 鼠标 | PS/2 |
-| 存储控制器 | Integrated MCA ESDI |
-| 实测硬盘几何参数 | 370 柱面、64 磁头、32 扇区 |
-| 软驱 | 3.5 英寸 1.44 MB |
+| ThinkPad 700 | F1EE 单色机型；参考盘启动回归 |
+| ThinkPad 700C | 独立 F1EC 机型，保留原始 39G9996 ROM 身份和独立 NVRAM |
+| 固件 | POST、自动配置、版本/身份页面、空系统错误日志 |
+| 存储 | 集成 MCA ESDI；参考盘到硬盘的启动交接 |
+| 彩色 Windows | Windows 3.2 标准模式、IBM VGA256C 1.20 驱动、640×480、8 位扫描、512 KiB 显存 |
+| LCD | 4:3 全屏；400 行文本居中，480 行图形铺满面板 |
+| 控制 | 纯键盘亮度/对比度调节，客机画面无新增控件或叠加提示 |
+| 构建 | Windows x64 Qt 软件渲染和 SDL；早期 700 开发使用 Linux ARM64 |
 
-可将 ROM 树放在虚拟机路径内，也可以显式指定：
+本项目仍为实验性社区分支，尚未经过上游审查，不宣称周期级精确模拟。
+Windows 增强模式驱动、扩展视频加速和完整硬件诊断套件**尚未验证**。
+详见[验证记录](docs/VERIFICATION.md)和[更新记录](docs/RELEASE-NOTES.md)。
 
-```bash
-./build/linux/src/86Box -R /path/to/rom-root /path/to/vm/86box.cfg
-```
+## 选择正确的机型和介质
 
-Windows PowerShell 的命令形式为：
+| 配置 | ThinkPad 700 | ThinkPad 700C |
+| --- | --- | --- |
+| 界面机型 | [MCA] IBM ThinkPad 700 (9552) | [MCA] IBM ThinkPad 700C (9552) |
+| 内部名称 | `ibmtp700` | `ibmtp700c` |
+| Planar 身份 | F1EE | F1EC |
+| ROM 根目录下的路径 | `machines/ibmtp700/39G9996.bin` | `machines/ibmtp700c/39G9996.bin` |
+| 参考盘 1.20 | `r700m120` | `r700c120` |
+| 系统程序 | `$0007000.IML` | `$0009000.IML` |
+| 配置 | [700 模板](configs/thinkpad700/86box.cfg.example) | [700C 模板](configs/thinkpad700c/86box.cfg.example) |
+
+现存 256 KiB `39G9996` 固件转储属于 700C。700C 直接使用原始内容；700 路径只在
+**加载后的内存副本**中转换系统板 ID 操作数并修复校验和，不修改用户 ROM 文件。
+
+700C 参考盘包含 `PF1EC.ADF`、`SF1EC.ADF` 和 `$0009000.IML`。
+两个机型的可写介质和 NVRAM 应分开，不要混用单色参考盘，也不要对 700C 介质运行
+700 专用修复脚本。另需正常的 86Box 字体 ROM 树；实测本地包的 ROM 根目录包含
+`video/mda/mda.rom`。
+
+### 配置和启动
+
+1. 将对应配置模板复制到新的虚拟机目录，命名为 `86box.cfg`。
+2. 准备 ROM 根目录，内部路径与上表一致。
+3. 在配置中设置硬盘工作副本和参考盘路径。实测配置为 IBM 486SLC/25、16 MiB、
+   内部显卡、PS/2 鼠标、集成 MCA ESDI、3.5 英寸 1.44 MB 软驱。
+4. 将对应参考盘保持挂载在 A:。冷启动先进入参考盘，再选择
+   **Start operating system** 交接到硬盘。
+
+实测硬盘几何参数为 **370 柱面 × 64 磁头 × 32 扇区**。
+需要 IBM 隐藏系统分区及匹配的 IML 程序，仅有普通 DOS 硬盘不能复现这条启动链。
+
+首次配置或转换 700C 硬盘工作副本时，在 700C 参考盘中选择
+**Backup/Restore system programs → Restore the system partition**，
+按提示提供 700/700C/720/720C 通用诊断盘，然后执行
+**Set configuration → Run automatic configuration**。
+只处理工作副本，保留原始镜像。
+
+构建后可在 PowerShell 启动：
 
 ```powershell
-& .\build\windows\src\86Box.exe -R C:\path\to\rom-root C:\path\to\vm\86box.cfg
+& .\build\windows-700c\src\86Box.exe -F -R "C:\path\to\roms" -P "C:\path\to\ThinkPad 700C"
 ```
 
-不同生成器的可执行文件子目录可能略有不同。`rom-root` 内必须包含
-`roms/machines/ibmtp700/39G9996.bin`。
-
-## 原开发机的一键启动
-
-迁移后的 Linux 开发机仍可使用：
+Linux 对应命令：
 
 ```bash
-./scripts/launch-thinkpad700.sh
+./build/linux/src/86Box -F -R /path/to/roms -P "/path/to/ThinkPad 700C"
 ```
 
-脚本使用被忽略的 `local-assets/legacy-work/` 历史运行环境，先验证/修复本地工作副本，
-设置 ROM 路径，再启动现有 ARM64 构建。若本地数据放在其他位置，可设置
-`TP700_WORK_ROOT=/another/path`。
+`-R` 指向直接包含 `machines/`、`video/` 的 ROM 根目录；
+`-P` 指向包含 `86box.cfg` 的虚拟机目录。
 
-也可以单独运行介质工具：
+### 安装 700C Windows 彩色驱动
+
+**700C120 VGA256C 1.20 驱动盘**与 **R700C120 参考盘**是不同的介质。
+[IBM 原始驱动安装说明](https://basterfield.com/pccbbs/mobiles/700c120.txt)
+要求在 Windows 前加载 `VESA.COM`，并选择
+**640x480x256 Small fonts 512k IBMVGA256c**。
+
+本地 Windows 3.2 标准模式已核对为 640×480、8 位扫描、512 KiB 显存。
+画笔中已显示自行生成的 256 色测试位图；Windows 保留调色板会合并部分输入颜色。
+
+![700C 运行彩色 Windows 3.2](docs/images/thinkpad700c-windows-color.png)
+
+![画笔显示 256 色测试图](docs/images/thinkpad700c-256-color-test.png)
+
+## 显示与键盘控制
+
+700C 直接使用客机 VGA 调色板，不叠加灰阶或单色染色。
+物理面板以固定 640×480、4:3 显示区域模拟。默认将参考盘的 640×400 文本居中，
+上下各留 40 行；Windows 的真正 640×480 图形铺满面板。
+
+如需可选的文本展开效果，可在 700C 机型配置启用 **LCD vertical expansion**
+（`lcd_vertical_expansion = 1`）。提供的模板使用 `0`，
+与 [IBM Quick Reference](https://macdat.net/files/pdf/ibm/user_manuals/thinkpad_700_ps2_quick_reference.pdf)
+中的默认设置一致。另见 [IBM 原始规格](https://oldthinkpad.com/static/pdf/ibm-thinkpad700xps2.pdf)。
+
+模拟器获得焦点后，Qt 软件渲染和 SDL 前端支持：
+
+| 快捷键 | 功能 |
+| --- | --- |
+| Ctrl+Shift+F5 / F6 | 降低 / 提高 LCD 亮度 |
+| Ctrl+Shift+F7 / F8 | 降低 / 提高 LCD 对比度 |
+| Ctrl+Shift+F9 | 恢复原始颜色，亮度/对比度均为 100 |
+| Ctrl+End | 释放鼠标 |
+| Ctrl+Alt+Page Up | 在 SDL 前端切换全屏 |
+
+LCD 调节只改变客机 RGB 输出，不增加控件、数值或叠加提示，也不影响宿主显示器。
+组合键中的功能键由宿主处理，不传给客机；正常退出时随虚拟机配置保存。
+其他 Qt 渲染器尚未验证这些控制，本配置请使用 Qt 软件渲染。
+
+## 构建
+
+[86Box 官方构建指南](https://86box.readthedocs.io/en/stable/dev/buildguide.html)
+列出各平台依赖。本仓库保留上游 CMake 构建系统，编译模拟器不需要固件或客机介质。
+
+### Windows x64
+
+使用 MSYS2 **UCRT64**，安装 GCC、Ninja、CMake、Qt5 static、SDL2 及官方指南中的依赖。
+准确的 CI 依赖清单见 [Windows 发布构建工作流](.github/workflows/windows_x64_release.yml)。
 
 ```bash
-TP700_WORK_ROOT="$PWD/local-assets/legacy-work" \
-  python3 tools/thinkpad700/patch_tp700_media.py
+git clone https://github.com/Deng-ge-open-source/86Box-Thinkpad700_700C.git
+cd 86Box-Thinkpad700_700C
+cmake -S . -B build/windows-700c --preset regular \
+  --toolchain ./cmake/flags-gcc-x86_64.cmake \
+  -DNEW_DYNAREC=OFF -DQT=ON
+cmake --build build/windows-700c --parallel 4
 ```
 
-遇到非预期文件大小、字节、校验和或 FAT 布局时，脚本会主动停止。
+实测可执行文件为 `build/windows-700c/src/86Box.exe`。
+SDL 前端请使用另一构建目录并设置 `-DQT=OFF`。
+CI 便携产物只含模拟器和公开文档，不含 ROM 或已安装客机。
+动态链接构建还可能需要依赖 DLL。
 
-## 实测 Linux 控制方式
+### Linux
 
-- 点击客机画面捕获鼠标。
-- `Ctrl+End` 释放鼠标；鼠标中键是备用方式。
-- `Ctrl+Alt+Page Up` 切换 SDL 前端全屏。
-- 使用窗口关闭按钮前，建议先退出全屏。
-
-## 后续开发约定
-
-今后的源码开发统一在本仓库进行。构建目录、ROM、虚拟机状态、磁盘镜像、日志和批量
-抓帧应放在被忽略的目录。提交前至少执行：
+按官方指南安装发行版依赖，然后执行：
 
 ```bash
-git diff --check
-cmake --build <你的构建目录> -j2
+cmake -S . -B build/linux --preset regular \
+  --toolchain ./cmake/flags-gcc-x86_64.cmake
+cmake --build build/linux --parallel 4
 ```
 
-提交说明应指出对应的固件路径或硬件行为；验证材料应使用可复现日志或少量精选截图，
-不要提交连续原始抓帧。
+Linux ARM64 使用 `cmake --preset flags-gcc-aarch64-regular`，然后构建
+`out/build/flags-gcc-aarch64-regular`，该配置启用新重编译器。
+迁移后的 700 工作站仍可通过
+[`scripts/launch-thinkpad700.sh`](scripts/launch-thinkpad700.sh)
+使用被忽略的历史目录布局。该启动器和
+`tools/thinkpad700/patch_tp700_media.py` 专用于单色 700。
 
-## 许可证与来源
+## 常见问题
 
-本分支保留 86Box 的 GNU GPL v2-or-later 许可证和上游声明，详见
-[`COPYING`](COPYING) 与 [`AUTHORS`](AUTHORS)。除非相关文件另有明确说明，对本仓库的
-新贡献采用相同许可证。
+| 现象 | 检查 |
+| --- | --- |
+| 开机内存计数较久 | 实测 16 MiB 完整 POST 约 38 秒，其中 CP52 内存检查约 32 秒。这些是固件检查点，不是错误码；CP67 在本地测试中不到 1 毫秒便通过。 |
+| 配置或系统身份警告 | 确认 F1EC/700C 介质和独立 NVRAM，使用对应参考盘完成配置。 |
+| 硬盘启动出现 `I9990303` | 检查 IBM 隐藏系统分区和对应机型 IML 程序。 |
+| Windows 仍为 16 色 | 安装 VGA256C 驱动并加载 `VESA.COM`；参考盘不会安装 Windows 显卡驱动。 |
+| 文本偏高 | 关闭 LCD vertical expansion；400 行文本上下应有未使用的面板区域。 |
 
-上游参考资料：
+正常构建已移除 CPU 循环中的全内存 IML 诊断扫描，保留原始 POST 检测。
+新建空错误日志会正确初始化，已有的非空错误日志会保留。
 
-- [86Box 项目](https://github.com/86Box/86Box)
-- [官方构建指南](https://86box.readthedocs.io/en/stable/dev/buildguide.html)
-- [ROM 搜索路径](https://86box.readthedocs.io/en/latest/usage/roms.html)
+![700C 参考盘确认错误日志为空](docs/images/thinkpad700c-error-log-empty.png)
+
+## 开发与私人交接
+
+```text
+src/                         模拟器源码和 ThinkPad 实现
+configs/thinkpad700*/         可公开的配置模板
+docs/                        验证、技术记录和精选截图
+scripts/                     启动与私人打包辅助脚本
+tools/thinkpad700/            介质、面板和验证工具
+local-assets/                被忽略的固件、介质、状态、工具链
+build/                       被忽略的构建产物
+private-dist/                被忽略的私人运行包与交接压缩包
+```
+
+交接源码前应执行 `git diff --check`、构建相关目标，并在本地介质可用时完成对应
+ThinkPad 的启动验证。公开文件检查和针对 DMA 的回归命令见
+[验证记录](docs/VERIFICATION.md)。英文和中文 README 应同步更新。
+
+已有本地 700C 运行环境时，可使用
+[`scripts/package-private-thinkpad700c.ps1`](scripts/package-private-thinkpad700c.ps1)
+生成带全新 README、源码快照和校验值的私人交接包。脚本只复制明确列出的文件，
+不带日志、连续截图、凭据或工具链。输出保存在 `private-dist/`，不要上传到 GitHub。
+
+## 实体 700 项目
+
+![在本项目改造后的 ThinkPad 700 外壳中运行 86Box](docs/images/thinkpad700-modernized-real-machine.jpg)
+
+原始 700 外壳内部使用现代硬件运行模拟器。
+早期[改造与固件开发记录](docs/DEVELOPMENT-NOTES.zh-CN.md)
+记述了这部分工作，700C 在同一模拟平台上扩展。
+
+## 许可证与致谢
+
+采用 GNU GPL v2 或更新版本，并保留 86Box 声明：
+[COPYING](COPYING)、[AUTHORS](AUTHORS)、[上游 README](docs/UPSTREAM_README.md)、
+[86Box](https://github.com/86Box/86Box)。
+本项目为独立社区项目，与 IBM、Lenovo 或 86Box 上游不存在隶属或官方认可关系。

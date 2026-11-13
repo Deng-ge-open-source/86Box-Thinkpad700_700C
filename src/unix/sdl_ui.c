@@ -62,7 +62,7 @@ tp700_panel_export_tick(void)
 
     path = getenv("TP700_PANEL_STATUS");
     if (path == NULL || path[0] == '\0' ||
-        strcmp(machine_get_internal_name(), "ibmtp700") != 0)
+        !machine_is_thinkpad_700())
         return;
 
     /* The physical controls follow pointer ownership.  With no captured
@@ -91,11 +91,11 @@ tp700_panel_export_tick(void)
         return;
 
     fprintf(stream,
-            "{\"timestamp_unix\":%.3f,\"pid\":%ld,\"machine\":\"ibmtp700\","
+            "{\"timestamp_unix\":%.3f,\"pid\":%ld,\"machine\":\"%s\","
             "\"running\":true,\"num\":%u,\"caps\":%u,\"scroll\":%u,"
             "\"hdd\":%d,\"floppy\":%d,\"mouse_captured\":%s}\n",
             (double) realtime.tv_sec + (double) realtime.tv_nsec / 1000000000.0,
-            (long) getpid(), num, caps, scroll,
+            (long) getpid(), machine_get_internal_name(), num, caps, scroll,
             tp700_panel_activity_active(&tp700_hdd_hold_until, now),
             tp700_panel_activity_active(&tp700_fdd_hold_until, now),
             mouse_capture ? "true" : "false");

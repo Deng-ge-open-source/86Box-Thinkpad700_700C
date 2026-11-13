@@ -80,7 +80,7 @@ opRETF_a16_imm(uint32_t fetchdat)
     int      cycles_old = cycles;
     UN_USED(cycles_old);
 
-    if (0 && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if (0 && machine_is_thinkpad_700() &&
         (CS == 0xf000) && (cpu_state.oldpc == 0x6d14) &&
         ((AX == 0x9001) || (AX == 0x9101)))
         pclog("TP700 RETF2 BEFORE(2386): AX=%04X SS:SP=%04X:%04X "
@@ -93,7 +93,7 @@ opRETF_a16_imm(uint32_t fetchdat)
     CPU_BLOCK_END();
     RETF_a16(offset);
 
-    if (0 && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if (0 && machine_is_thinkpad_700() &&
         ((AX == 0x9001) || (AX == 0x9101)))
         pclog("TP700 RETF2 AFTER(2386): AX=%04X CS:IP=%04X:%04X "
               "SS:SP=%04X:%04X\n", AX, CS, (uint16_t) cpu_state.pc,

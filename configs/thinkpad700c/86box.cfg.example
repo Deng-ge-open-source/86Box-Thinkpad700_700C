@@ -1,0 +1,44 @@
+[General]
+confirm_exit = 1
+confirm_reset = 1
+force_43 = 1
+start_in_fullscreen = 1
+video_fullscreen_scale = 1
+video_filter_method = 0
+video_grayscale = 0
+
+[Machine]
+cpu_family = ibm486slc
+cpu_multi = 1
+cpu_speed = 25000000
+cpu_use_dynarec = 1
+machine = ibmtp700c
+mem_size = 16384
+
+[Video]
+gfxcard = internal
+
+[IBM ThinkPad 700C (9552)]
+bios = ibmtp700c_39g9996
+lcd_vertical_expansion = 0
+
+[Input devices]
+keyboard_type = keyboard_at
+mouse_type = ps2
+
+[Storage controllers]
+hdc_1 = esdi_integrated_mca
+
+[Hard disks]
+# Set this path in the 86Box UI after copying the template into a VM folder.
+hdd_01_esdi_channel = 0
+hdd_01_fn = disk/thinkpad700c-working-copy.img
+hdd_01_parameters = 32, 64, 370, 0, esdi
+hdd_01_speed = 1997_5400rpm
+
+[Floppy and CD-ROM drives]
+# Supply your own legally obtained boot/reference disk image.
+fdd_01_fn = media/r700c120-working-copy.ima
+fdd_01_turbo = 1
+fdd_01_type = 35_2hd
+fdd_02_type = none

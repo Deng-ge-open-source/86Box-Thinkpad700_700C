@@ -55,6 +55,9 @@
 #    define DWMWA_USE_IMMERSIVE_DARK_MODE 20
 #endif
 
+extern "C" {
+#include <86box/machine.h>
+}
 #include <86box/keyboard.h>
 #include <86box/mouse.h>
 #include <86box/plat.h>
@@ -482,6 +485,22 @@ void
 WindowsRawInputFilter::keyboard_handle(PRAWINPUT raw)
 {
     RAWKEYBOARD rawKB = raw->data.keyboard;
+
+    static unsigned lcdKeysDown = 0;
+    if (machine_is_thinkpad_700() && rawKB.MakeCode >= 0x3f && rawKB.MakeCode <= 0x43 &&
+        !(rawKB.Flags & (RI_KEY_E0 | RI_KEY_E1))) {
+        const unsigned bit = 1U << (rawKB.MakeCode - 0x3f);
+        if ((lcdKeysDown & bit) ||
+            ((GetAsyncKeyState(VK_CONTROL) & 0x8000) &&
+             (GetAsyncKeyState(VK_SHIFT) & 0x8000) &&
+             !(GetAsyncKeyState(VK_MENU) & 0x8000))) {
+            if (rawKB.Flags & RI_KEY_BREAK)
+                lcdKeysDown &= ~bit;
+            else
+                lcdKeysDown |= bit;
+            return; /* Qt handles the adjustment once; raw input only filters. */
+        }
+    }
 
     win_keyboard_handle(rawKB.MakeCode, (rawKB.Flags & RI_KEY_BREAK),
                         (rawKB.Flags & RI_KEY_E0), (rawKB.Flags & RI_KEY_E1));

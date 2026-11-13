@@ -372,6 +372,21 @@ thinkpad_700_ss_write(uint16_t port, uint8_t val, UNUSED(void *priv))
     ps2.tp700_ss_regs[port - 0x0078] = val;
 }
 
+/* VPD CRC-16/CCITT, in the low-byte-first order used by the IBM service. */
+static uint16_t
+thinkpad_700_ss_crc(uint16_t crc, unsigned first, unsigned last)
+{
+    for (unsigned i = first; i <= last; i++) {
+        for (unsigned byte = 0; byte < 2; byte++) {
+            crc ^= ((ps2.tp700_ss_words[i] >> (byte * 8)) & 0xff) << 8;
+            for (unsigned bit = 0; bit < 8; bit++)
+                crc = (crc & 0x8000) ? (crc << 1) ^ 0x1021 : crc << 1;
+        }
+    }
+
+    return crc;
+}
+
 /*The model 70 type 3/4 BIOS performs cache testing. Since 86Box doesn't have any
   proper cache emulation, it's faked a bit here.
 
@@ -1167,7 +1182,9 @@ ps2_mca_read(const uint16_t port, UNUSED(void *priv))
             if (!(ps2.setup & PS2_SETUP_IO))
                 temp = ps2.planar_read(port);
             else if (!(ps2.setup & PS2_SETUP_VGA))
-                temp = 0xfd;
+                /* Dedicated video setup, separate from the F1EC planar.
+                   IBM's VGA256C VESA TSR recognizes the 700C as 90FB. */
+                temp = (ps2.planar_id == 0xf1ec) ? 0xfb : 0xfd;
             else if (ps2.adapter_setup & PS2_ADAPTER_SETUP)
                 temp = mca_read(port);
             else
@@ -1177,7 +1194,7 @@ ps2_mca_read(const uint16_t port, UNUSED(void *priv))
             if (!(ps2.setup & PS2_SETUP_IO))
                 temp = ps2.planar_read(port);
             else if (!(ps2.setup & PS2_SETUP_VGA))
-                temp = 0xef;
+                temp = (ps2.planar_id == 0xf1ec) ? 0x90 : 0xef;
             else if (ps2.adapter_setup & PS2_ADAPTER_SETUP)
                 temp = mca_read(port);
             else
@@ -1549,7 +1566,8 @@ ps2_mca_board_thinkpad_700_init(void)
     ps2.tp700_mem_presence_select = 1;
 
     if (gfxcard[0] == VID_INTERNAL)
-        device_add(&ps1vga_mca_device);
+        device_add(ps2.planar_id == 0xf1ec ? &ibm_thinkpad700c_video_device
+                                          : &ps1vga_mca_device);
 }
 
 static void
@@ -1989,7 +2007,8 @@ machine_ps2_common_init(const machine_t *model)
     machine_common_init(model);
 
     if (fdc_current[0] == FDC_INTERNAL) {
-        const device_t *fdc_device = (model->device == &thinkpad_700_device)
+        const device_t *fdc_device = ((model->device == &thinkpad_700_device) ||
+                                      (model->device == &thinkpad_700c_device))
                                    ? &fdc_ps2_mca_powerdown_device
                                    : &fdc_ps2_mca_device;
         device_add(fdc_device);
@@ -2070,10 +2089,11 @@ const device_t ps2_model_50_device = {
  * the same planar ID at three mirrored operands in each 128 KiB half.  The
  * physical EPROM part number was shared; select the monochrome build for this
  * machine by converting those operands in the loaded copy and repairing the
- * two affected 64 KiB checksums.  The user's source dump remains untouched.
+ * two affected 64 KiB checksums.  The 700C retains the original F1EC image.
+ * The user's source dump remains untouched for either model.
  */
 static int
-thinkpad_700_select_monochrome_rom(void)
+thinkpad_700_select_rom(int color)
 {
     static const uint32_t planar_id_offsets[] = {
         0x1057b, 0x107f2, 0x11be1, 0x30378, 0x305ee, 0x31517
@@ -2084,9 +2104,11 @@ thinkpad_700_select_monochrome_rom(void)
         const uint32_t offset = planar_id_offsets[i];
 
         if ((rom[offset] == 0xec) && (rom[offset + 1] == 0xf1)) {
-            rom[offset] = 0xee;
-            converted++;
-        } else if (!((rom[offset] == 0xee) && (rom[offset + 1] == 0xf1))) {
+            if (!color) {
+                rom[offset] = 0xee;
+                converted++;
+            }
+        } else if (color || !((rom[offset] == 0xee) && (rom[offset + 1] == 0xf1))) {
             pclog("TP700 ROM: unexpected planar-ID operand at %05X: %02X%02X\n",
                   offset, rom[offset], rom[offset + 1]);
             return 0;
@@ -2118,7 +2140,8 @@ thinkpad_700_select_monochrome_rom(void)
         }
     }
 
-    pclog("TP700 ROM: selected checksum-correct monochrome F1EE build\n");
+    pclog("TP700 ROM: selected checksum-correct %s build\n",
+          color ? "color F1EC" : "monochrome F1EE");
     return 1;
 }
 
@@ -2164,24 +2187,73 @@ const device_t thinkpad_700_device = {
     .config        = thinkpad_700_config
 };
 
+static const device_config_t thinkpad_700c_config[] = {
+    // clang-format off
+    {
+        .name           = "bios",
+        .description    = "BIOS Version",
+        .type           = CONFIG_BIOS,
+        .default_string = "ibmtp700c_39g9996",
+        .default_int    = 0,
+        .file_filter    = NULL,
+        .spinner        = { 0 },
+        .selection      = { { 0 } },
+        .bios           = {
+            {
+                .name          = "IBM ThinkPad 700C 39G9996",
+                .internal_name = "ibmtp700c_39g9996",
+                .bios_type     = BIOS_NORMAL,
+                .files_no      = 1,
+                .local         = 0,
+                .size          = 262144,
+                .files         = { "roms/machines/ibmtp700c/39G9996.bin", "" }
+            },
+            { .files_no = 0 }
+        }
+    },
+    {
+        .name        = "lcd_vertical_expansion",
+        .description = "LCD vertical expansion",
+        .type        = CONFIG_BINARY,
+        .default_int = 0
+    },
+    { .name = "", .description = "", .type = CONFIG_END }
+    // clang-format on
+};
+
+const device_t thinkpad_700c_device = {
+    .name          = "IBM ThinkPad 700C (9552)",
+    .internal_name = "ibmtp700c",
+    .flags         = 0,
+    .local         = 0,
+    .init          = NULL,
+    .close         = NULL,
+    .reset         = NULL,
+    .available     = NULL,
+    .speed_changed = NULL,
+    .force_redraw  = NULL,
+    .config        = thinkpad_700c_config
+};
+
 int
 machine_thinkpad_700_init(const machine_t *model)
 {
     int         ret;
     const char *fn;
     uint16_t    vector;
+    const int   color = (model->device == &thinkpad_700c_device);
 
     if (!device_available(model->device))
         return 0;
 
     device_context(model->device);
-    fn  = device_get_bios_file(machine_get_device(machine), device_get_config_bios("bios"), 0);
+    fn  = device_get_bios_file(model->device, device_get_config_bios("bios"), 0);
     ret = bios_load_linear(fn, 0x000c0000, 262144, 0);
     device_context_restore();
 
     pclog("TP700 INIT: BIOS=%s loaded=%d bios_only=%d\n", fn, ret, bios_only);
 
-    if (ret && !thinkpad_700_select_monochrome_rom())
+    if (ret && !thinkpad_700_select_rom(color))
         return 0;
 
     if (bios_only || !ret)
@@ -2210,8 +2282,8 @@ machine_thinkpad_700_init(const machine_t *model)
     /* The Model 50 auxiliary PIT output is wired to NMI; the 9552 is not. */
     nmi_mask = 0;
 
-    /* The monochrome ThinkPad 700 planar is F1EE (F1EC is the 700C). */
-    ps2.planar_id = 0xf1ee;
+    /* Match the selected ROM and the model's Reference Diskette ADF. */
+    ps2.planar_id = color ? 0xf1ec : 0xf1ee;
     ps2_mca_board_thinkpad_700_init();
     device_add(&ps2_nvr_device);
 
@@ -2277,23 +2349,25 @@ machine_thinkpad_700_init(const machine_t *model)
      * A blank, factory-serviceable EEPROM is not all zeroes: word 7 protects
      * words 8..40, and word 0 protects words 1..6 plus 41..63.  The IBM IML
      * uses the CRC-16 routine at 0000:4293 with an FFFFh seed and expects a
-     * zero remainder when the stored checksum is appended.  Supplying the
-     * correct blank-region checksums models an unprogrammed board instead of
-     * a corrupt one; the Reference Diskette may then populate identification
-     * data through the normal EEPROM write protocol.
+     * zero remainder when the stored checksum is appended.  The stored
+     * checksums must cover the actual serial number below, including the
+     * color model's different identification.  A checksum for a different
+     * serial produces POST 00187 and the Reference Diskette's system-identity
+     * repair prompt.
      */
-    ps2.tp700_ss_words[0] = 0xc53e;
-    ps2.tp700_ss_words[7] = 0xd5b6;
     /* Words 29h..30h are the 16-byte system-unit serial number.  The EEPROM
        service presents each word low byte first. */
     {
-        static const char tp700_serial[16] = "9552-700-0000001";
+        const char *tp700_serial = color ? "9552-30B-0000001" : "9552-700-0000001";
 
         for (unsigned i = 0; i < 8; i++)
             ps2.tp700_ss_words[0x29 + i] =
                 (uint8_t) tp700_serial[i * 2] |
                 ((uint16_t) (uint8_t) tp700_serial[i * 2 + 1] << 8);
     }
+    ps2.tp700_ss_words[7] = thinkpad_700_ss_crc(0xffff, 8, 40);
+    ps2.tp700_ss_words[0] = thinkpad_700_ss_crc(
+        thinkpad_700_ss_crc(0xffff, 1, 6), 41, 63);
     ps2.tp700_ss_command = 0;
     io_sethandler(0x0078, 0x0005,
                   thinkpad_700_ss_read, NULL, NULL,

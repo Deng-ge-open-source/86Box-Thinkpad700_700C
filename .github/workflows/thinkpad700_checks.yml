@@ -1,0 +1,36 @@
+name: ThinkPad source checks
+
+on:
+  push:
+    paths:
+      - src/**
+      - tools/thinkpad700/**
+      - scripts/**
+      - configs/**
+      - docs/**
+      - README*
+      - .github/workflows/thinkpad700_checks.yml
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check whitespace
+        run: git show --format= --check HEAD
+      - name: Check public file boundary
+        run: python3 tools/thinkpad700/check_public_tree.py
+      - name: Build and run DMA arbitration regression
+        run: |
+          mkdir -p build/thinkpad-tests
+          gcc -O2 -fwhole-program -Isrc/include -Isrc/cpu -ffunction-sections -fdata-sections \
+            tools/thinkpad700/tests/test_dma_arbitration.c -Wl,--gc-sections \
+            -o build/thinkpad-tests/dma-arbitration
+          ./build/thinkpad-tests/dma-arbitration

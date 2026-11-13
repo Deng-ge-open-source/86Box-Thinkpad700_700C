@@ -185,7 +185,7 @@ ps2_write(void *priv)
                  * TrackPoint commands acknowledge every valid command byte;
                  * 41 has no data response.
                  */
-                if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+                if (machine_is_thinkpad_700() &&
                     (val == 0x41))
                     kbc_at_dev_queue_add(dev, 0xfa, 0);
                 else
@@ -213,7 +213,7 @@ ps2_write(void *priv)
 
         switch (dev->command) {
             case 0xe2: /* IBM TrackPoint controller command prefix */
-                if (!strcmp(machine_get_internal_name(), "ibmtp700")) {
+                if (machine_is_thinkpad_700()) {
                     dev->flags |= FLAG_CTRLDAT;
                     kbc_at_dev_queue_add(dev, 0xfa, 0);
                     dev->state = DEV_STATE_MAIN_WANT_IN;

@@ -1611,7 +1611,7 @@ x86_int(int num)
     static unsigned tp700_int1_traces = 0;
     static unsigned tp700_divide_traces = 0;
 
-    if ((num == 0) && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if ((num == 0) && machine_is_thinkpad_700() &&
         (tp700_divide_traces++ < 64))
         pclog("TP700 DIVIDE ERROR: from=%04X oldpc=%04X pc=%04X "
               "AX=%04X BX=%04X DI=%04X DS=%04X operand=%02X "
@@ -1620,7 +1620,7 @@ x86_int(int num)
               AX, BX, DI, DS, readmemb(ds, (BX + DI + 1) & 0xffff),
               readmemw(0, 0x0002), readmemw(0, 0x0000), SS, SP);
 
-    if ((num == 1) && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if ((num == 1) && machine_is_thinkpad_700() &&
         (tp700_int1_traces++ < 96))
         pclog("TP700 INT1: from=%04X oldpc=%04X pc=%04X FLAGS=%04X "
               "target=%04X:%04X SS:SP=%04X:%04X top=%04X %04X %04X\n",
@@ -1629,7 +1629,7 @@ x86_int(int num)
               SS, SP, readmemw(ss, SP), readmemw(ss, (SP + 2) & 0xffff),
               readmemw(ss, (SP + 4) & 0xffff));
 
-    if ((num == 0x0a) && !strcmp(machine_get_internal_name(), "ibmtp700")) {
+    if ((num == 0x0a) && machine_is_thinkpad_700()) {
         const unsigned trace_index = tp700_irq2_traces++;
 
         if ((trace_index < 64) || ((trace_index & 0xffff) == 0))
@@ -1642,14 +1642,14 @@ x86_int(int num)
                   pic.int_pending, pic2.int_pending);
     }
 
-    if ((num == 0x0e) && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if ((num == 0x0e) && machine_is_thinkpad_700() &&
         (tp700_irq6_traces++ < 64))
         pclog("TP700 IRQ6 ENTRY: from=%04X:%04X SS:SP=%04X:%04X "
               "FLAGS=%04X vector=%04X:%04X\n",
               CS, (uint16_t) cpu_state.oldpc, SS, (uint16_t) ESP,
               cpu_state.flags, readmemw(0, 0x003a), readmemw(0, 0x0038));
 
-    if ((num == 2) && !strcmp(machine_get_internal_name(), "ibmtp700"))
+    if ((num == 2) && machine_is_thinkpad_700())
         pclog("TP700 HW INT2: from %04X:%08X oldpc=%08X nmi=%d enable=%d mask=%02X "
               "state=%02X BDA0E=%04X BDA13=%04X\n",
               CS, cpu_state.pc, cpu_state.oldpc, nmi, nmi_enable, nmi_mask,
@@ -1780,7 +1780,7 @@ x86_int_sw(int num)
      * deliberately narrow: only calls which identify a drive or pathname are
      * recorded, so normal console I/O does not drown out the failing request.
      */
-    if ((num == 0x21) && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if ((num == 0x21) && machine_is_thinkpad_700() &&
         (tp700_int21_file_traces < 4096)) {
         const int has_path = (AH == 0x3c) || (AH == 0x3d) || (AH == 0x41) ||
                              (AH == 0x43) || (AH == 0x4e) || (AH == 0x56) ||
@@ -1814,7 +1814,7 @@ x86_int_sw(int num)
         }
     }
 
-    if ((num == 0x1c) && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if ((num == 0x1c) && machine_is_thinkpad_700() &&
         (tp700_sw_int1c_traces++ < 64))
         pclog("TP700 SW INT1C: from=%04X:%04X target=%04X:%04X "
               "bytes=%02X %02X %02X %02X %02X "
@@ -1826,7 +1826,7 @@ x86_int_sw(int num)
               readmemb(0, 0xfff57),
               SS, SP, pic.irr, pic.isr, pic.imr);
 
-    if ((num == 0x0a) && !strcmp(machine_get_internal_name(), "ibmtp700")) {
+    if ((num == 0x0a) && machine_is_thinkpad_700()) {
         const unsigned trace_index = tp700_sw_int0a_traces++;
 
         if (trace_index < 64)
@@ -1836,7 +1836,7 @@ x86_int_sw(int num)
                   AX, BX, CX, DX, SS, SP);
     }
 
-    if ((num == 0x13) && !strcmp(machine_get_internal_name(), "ibmtp700")) {
+    if ((num == 0x13) && machine_is_thinkpad_700()) {
         /*
          * Once the Reference Diskette's own boot code starts issuing floppy
          * requests, its fixed disk C: is the logical System Partition.  The
@@ -2195,7 +2195,7 @@ x86_int_sw(int num)
         }
     }
 
-    if (0 && (num == 0x15) && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if (0 && (num == 0x15) && machine_is_thinkpad_700() &&
         ((AX == 0x9001) || (AX == 0x9101) ||
          ((AX & 0xff00) == 0x2100) ||
          ((AX & 0xff00) == 0xc200) || ((AX & 0xff00) == 0xd200)))
@@ -2211,7 +2211,7 @@ x86_int_sw(int num)
               readmemw(ss, (SP + 4) & 0xffff),
               readmemw(ss, (SP + 6) & 0xffff));
 
-    if ((num == 2) && !strcmp(machine_get_internal_name(), "ibmtp700"))
+    if ((num == 2) && machine_is_thinkpad_700())
         pclog("TP700 SW INT2: from %04X:%08X nmi=%d enable=%d mask=%02X\n",
               CS, cpu_state.pc, nmi, nmi_enable, nmi_mask);
 
@@ -2803,7 +2803,7 @@ nmi_raise(void)
     if (is486 && (cpu_fast_off_flags & 0x20000000))
         cpu_fast_off_advance();
 
-    if (!strcmp(machine_get_internal_name(), "ibmtp700"))
+    if (machine_is_thinkpad_700())
         pclog("TP700 NMI RAISE: at %04X:%08X mask=%02X\n",
               CS, cpu_state.pc, nmi_mask);
     nmi = 1;

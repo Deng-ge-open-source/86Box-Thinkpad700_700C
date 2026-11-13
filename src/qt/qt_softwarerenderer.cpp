@@ -24,12 +24,16 @@
 #include <QScreen>
 #include "qt_util.hpp"
 
+extern void standalone_scale(QRect &destination, int width, int height, QRect source, int scalemode);
+
 extern "C" {
 #include <86box/86box.h>
+#include <86box/device.h>
 #include <86box/machine.h>
 #include <86box/path.h>
 #include <86box/plat.h>
 #include <86box/video.h>
+#include <86box/vid_lcd.h>
 }
 
 SoftwareRenderer::SoftwareRenderer(QWidget *parent)
@@ -193,9 +197,43 @@ SoftwareRenderer::onPaint(QPaintDevice *device)
         const int lcdHeight = (destination.height() * 5) / 6;
         lcdDestination.setTop(destination.top() + ((destination.height() - lcdHeight) / 2));
         lcdDestination.setHeight(lcdHeight);
+    } else if (!strcmp(machine_get_internal_name(), "ibmtp700c")) {
+        char expansionOption[] = "lcd_vertical_expansion";
+
+        /* The physical TFT is always 640x480.  With vertical expansion off,
+           an 80x25, 8x16 text screen occupies 400 centered panel rows.
+           Expanding every text mode to 480 makes the IBM logo and glyphs
+           20 percent too tall.  True 480-line graphics uses the full panel. */
+        standalone_scale(lcdDestination, device->width(), device->height(), source, FULLSCR_SCALE_43);
+        if ((source.height() > 0) && (source.height() < 480) &&
+            !machine_get_config_int(expansionOption)) {
+            const int lcdHeight = qMax(1, (lcdDestination.height() * source.height()) / 480);
+            lcdDestination.setTop(lcdDestination.top() + ((lcdDestination.height() - lcdHeight) / 2));
+            lcdDestination.setHeight(lcdHeight);
+        }
     }
 
-    painter.drawImage(lcdDestination, *images[cur_image], source);
+    if (machine_is_thinkpad_700() &&
+        (tp700_lcd_brightness != 100 || tp700_lcd_contrast != 100)) {
+        if (lcdBrightness != tp700_lcd_brightness || lcdContrast != tp700_lcd_contrast) {
+            lcdBrightness = tp700_lcd_brightness;
+            lcdContrast = tp700_lcd_contrast;
+            tp700_lcd_build_lut(lcdLut.data(), lcdBrightness, lcdContrast);
+        }
+        if (lcdImage.size() != source.size())
+            lcdImage = QImage(source.size(), QImage::Format_RGB32);
+        if (!lcdImage.isNull()) {
+            for (int y = 0; y < source.height(); ++y) {
+                const auto *src = reinterpret_cast<const uint32_t *>(images[cur_image]->constScanLine(source.y() + y)) + source.x();
+                auto *dst = reinterpret_cast<uint32_t *>(lcdImage.scanLine(y));
+                for (int x = 0; x < source.width(); ++x)
+                    dst[x] = tp700_lcd_pixel(src[x], lcdLut.data());
+            }
+            painter.drawImage(lcdDestination, lcdImage, lcdImage.rect());
+        } else
+            painter.drawImage(lcdDestination, *images[cur_image], source);
+    } else
+        painter.drawImage(lcdDestination, *images[cur_image], source);
     painter.end();
 }
 

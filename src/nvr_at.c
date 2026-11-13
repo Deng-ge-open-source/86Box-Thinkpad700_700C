@@ -598,7 +598,7 @@ nvr_reg_write(uint16_t reg, uint8_t val, void *priv)
     uint8_t   old;
 
     old = nvr->regs[reg];
-    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if (machine_is_thinkpad_700() &&
         (reg >= 0x0e)) {
         pclog("TP700 CMOS WRITE: reg=%02X old=%02X new=%02X from=%04X:%08X\n",
               reg, old, val, CS, cpu_state.pc);
@@ -946,7 +946,7 @@ nvr_read(uint16_t addr, void *priv)
             ret = (ret & 0x7f) | (nmi_mask ? 0x00 : 0x80);
     }
 
-    if (0 && !strcmp(machine_get_internal_name(), "ibmtp700") && (addr & 1) &&
+    if (0 && machine_is_thinkpad_700() && (addr & 1) &&
         (local->addr[addr_id] >= 0x0e))
         pclog("TP700 CMOS READ: reg=%02X data=%02X from=%04X:%08X\n",
               local->addr[addr_id], ret, CS, cpu_state.pc);

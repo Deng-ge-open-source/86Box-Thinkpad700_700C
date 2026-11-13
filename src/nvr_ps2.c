@@ -79,7 +79,7 @@ ps2_nvr_read(uint16_t port, void *priv)
 
         case 0x76:
             ret = nvr->ram[nvr->addr];
-            if (0 && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+            if (0 && machine_is_thinkpad_700() &&
                 (nvr->addr == 0x0192)) {
                 pclog("TP700 NVR0192 READ: data=%02X at %04X:%08X "
                       "SS:SP=%04X:%04X stack=%04X %04X %04X %04X "
@@ -94,7 +94,7 @@ ps2_nvr_read(uint16_t port, void *priv)
                       readmemwl(ss + ((SP + 12) & 0xffff)),
                       readmemwl(ss + ((SP + 14) & 0xffff)));
             }
-            if (0 && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+            if (0 && machine_is_thinkpad_700() &&
                 ((nvr->reads++ & 0xff) == 0))
                 pclog("TP700 NVR: read=%" PRIu64 " addr=%04X data=%02X\n",
                       nvr->reads, nvr->addr, ret);
@@ -123,7 +123,7 @@ ps2_nvr_write(uint16_t port, uint8_t val, void *priv)
 
         case 0x76:
             nvr->ram[nvr->addr] = val;
-            if (0 && !strcmp(machine_get_internal_name(), "ibmtp700"))
+            if (0 && machine_is_thinkpad_700())
                 pclog("TP700 NVR: write=%" PRIu64 " addr=%04X data=%02X at %04X:%08X phys=%08X\n",
                       ++nvr->writes, nvr->addr, val, CS, cpu_state.pc,
                       cs + cpu_state.pc);
@@ -163,6 +163,24 @@ ps2_nvr_init(const device_t *info)
         if (fread(nvr->ram, 1, nvr->size, fp) != nvr->size)
             fatal("ps2_nvr_init(): Error reading EEPROM data\n");
         fclose(fp);
+    }
+
+    /* The 9552 error-log service requires its initialized FFh signature.
+       A zero-filled new NVRAM (or an older empty VM log) otherwise makes
+       Reference Diskette INT 15h/AX=0521h fail with AH=02.  Initialize only
+       an empty log; retain every existing record. */
+    if (machine_is_thinkpad_700() && (nvr->size >= 0x3fa) &&
+        (nvr->ram[0x38a] == 0)) {
+        int empty = 1;
+
+        for (unsigned i = 0x38b; i < 0x3fa; i++) {
+            if (nvr->ram[i]) {
+                empty = 0;
+                break;
+            }
+        }
+        if (empty)
+            nvr->ram[0x38a] = 0xff;
     }
 
     return nvr;
