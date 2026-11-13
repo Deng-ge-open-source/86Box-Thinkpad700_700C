@@ -69,7 +69,7 @@ jobs:
           - arch: arm64
             toolchain: ./cmake/llvm-macos-aarch64.cmake
             slug: -arm64
-            runner: macos-14
+            runner: macos-15
         exclude:
           - dynarec:
               new: off
