@@ -104,7 +104,7 @@ port_92_writeb(uint16_t port, uint8_t val, void *priv)
      * disabled A20, honor the Reference Diskette's FEDCh request and enter
      * the fixed-disk bootstrap.  This leaves A: mounted for the next launch.
      */
-    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if (machine_is_thinkpad_700() &&
         ((ram[0x472] | (ram[0x473] << 8)) == 0xfedc)) {
         ram[0x472] = ram[0x473] = 0;
         tp700_hdd_boot_pending  = 1;

@@ -73,7 +73,7 @@ POP_L_OP(ESP)
 static int
 opPUSHA_w(UNUSED(uint32_t fetchdat))
 {
-    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if (machine_is_thinkpad_700() &&
         (CS == 0xf000) && (cpu_state.oldpc == 0xac5f)) {
         const uint32_t stack = ss + (ESP & 0xffff);
 
@@ -431,7 +431,7 @@ opENTER_w(uint32_t fetchdat)
 #endif
     uint16_t tempw;
 
-    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if (machine_is_thinkpad_700() &&
         (CS == 0xf000) && (cpu_state.oldpc == 0xac5b)) {
         const uint32_t stack = ss + (ESP & 0xffff);
 

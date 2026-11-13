@@ -45,6 +45,15 @@ int bios_only = 0;
 int machine;
 // int AT, PCI;
 
+/* Shared 9552 hardware paths, including the color 700C variant. */
+int
+machine_is_thinkpad_700(void)
+{
+    const device_t *device = machine_get_device(machine);
+
+    return (device == &thinkpad_700_device) || (device == &thinkpad_700c_device);
+}
+
 #ifdef ENABLE_MACHINE_LOG
 int machine_do_log = ENABLE_MACHINE_LOG;
 

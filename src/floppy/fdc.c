@@ -665,7 +665,7 @@ int
 real_drive(fdc_t *fdc, int drive)
 {
     /* The ThinkPad 700 planar wires its single internal drive to unit 3. */
-    if (!strcmp(machine_get_internal_name(), "ibmtp700") && (drive == 3))
+    if (machine_is_thinkpad_700() && (drive == 3))
         return 0;
 
     if (drive < 2)
@@ -1296,7 +1296,7 @@ fdc_write(uint16_t addr, uint8_t val, void *priv)
                             case 0x06: /* Read data */
                             case 0x0c: /* Read deleted data */
                                 fdc_io_command_phase1(fdc, 0);
-                                if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+                                if (machine_is_thinkpad_700() &&
                                     (fdc->params[1] == 2) &&
                                     (fdc->params[2] == 1) &&
                                     (fdc->params[3] == 9))
@@ -1343,7 +1343,7 @@ fdc_write(uint16_t addr, uint8_t val, void *priv)
                                 if ((drive_num >= FDD_NUM) || !fdd_get_flags(drive_num) ||
                                     !motoron[drive_num] ||
                                     (fdd_track0(drive_num) &&
-                                     strcmp(machine_get_internal_name(), "ibmtp700"))) {
+                                     !machine_is_thinkpad_700())) {
                                     fdc_log("Failed recalibrate\n");
                                     if ((drive_num >= FDD_NUM) || !fdd_get_flags(drive_num) || !motoron[drive_num])
                                         fdc->st0 = 0x70 | (fdc->params[0] & 3);
@@ -1797,7 +1797,7 @@ fdc_callback(void *priv)
     int    compare    = 0;
     int    drive_num  = 0;
     int    old_sector = 0;
-    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if (machine_is_thinkpad_700() &&
         (fdc->rw_track == 2) && (fdc->head == 1) &&
         (fdc->sector == 9))
         pclog("TP700 LAST IBMBIO FDC CALLBACK: interrupt=%d tc=%d "
@@ -2285,7 +2285,7 @@ fdc_sector_finishcompare(fdc_t *fdc, int satisfying)
 void
 fdc_sector_finishread(fdc_t *fdc)
 {
-    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if (machine_is_thinkpad_700() &&
         (fdc->rw_track == 2) && (fdc->head == 1) &&
         (fdc->sector == 9))
         pclog("TP700 LAST IBMBIO FINISHREAD: tc=%d stat=%02X "

@@ -39,7 +39,7 @@ opINT(uint32_t fetchdat)
     UN_USED(cycles_old);
     uint8_t temp = getbytef();
 
-    if ((temp == 2) && !strcmp(machine_get_internal_name(), "ibmtp700"))
+    if ((temp == 2) && machine_is_thinkpad_700())
         pclog("TP700 INT 02 OPCODE: at %04X:%08X oldpc=%08X "
               "SS:SP=%04X:%04X nmi=%d enable=%d mask=%02X\n",
               CS, cpu_state.pc - 2, cpu_state.oldpc,

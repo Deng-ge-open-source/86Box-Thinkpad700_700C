@@ -21,6 +21,7 @@
 #include <86box/plat_dynld.h>
 #include <86box/sound.h>
 #include <86box/video.h>
+#include <86box/vid_lcd.h>
 #include <86box/ui.h>
 #include <86box/version.h>
 #include <86box/ini.h>
@@ -248,7 +249,7 @@ tp700_controls_poll(void)
     int         changed;
     int         volume_changed;
 
-    if (strcmp(machine_get_internal_name(), "ibmtp700") != 0)
+    if (!machine_is_thinkpad_700())
         return;
     if (tp700_controls.last_poll != 0 &&
         (uint32_t) (now - tp700_controls.last_poll) < 100)
@@ -321,13 +322,23 @@ tp700_controls_transform(const void *source, int width, int height)
 {
     const uint32_t *input = (const uint32_t *) source;
     size_t          needed;
+    uint8_t         lut[256];
+    uint8_t         keyboard_lut[256];
 
     tp700_controls_poll();
-    if (!tp700_controls.baseline_set ||
-        (!tp700_controls.invert &&
-         tp700_controls.brightness == tp700_controls.baseline_brightness &&
-         tp700_controls.contrast == tp700_controls.baseline_contrast))
+    const int physical_active = tp700_controls.baseline_set &&
+        (tp700_controls.invert ||
+         tp700_controls.brightness != tp700_controls.baseline_brightness ||
+         tp700_controls.contrast != tp700_controls.baseline_contrast);
+    const int keyboard_active = machine_is_thinkpad_700() &&
+        (tp700_lcd_brightness != 100 || tp700_lcd_contrast != 100);
+    if (!physical_active && !keyboard_active)
         return source;
+
+    tp700_lcd_build_lut(keyboard_lut, keyboard_active ? tp700_lcd_brightness : 100,
+                       keyboard_active ? tp700_lcd_contrast : 100);
+    for (int i = 0; i < 256; ++i)
+        lut[i] = keyboard_lut[physical_active ? tp700_controls.lut[i] : i];
 
     needed = (size_t) 2048 * (size_t) height;
     if (needed > tp700_controls.pixel_capacity) {
@@ -344,11 +355,7 @@ tp700_controls_transform(const void *source, int width, int height)
         uint32_t       *dst = tp700_controls.pixels + row * 2048;
 
         for (int column = 0; column < width; ++column) {
-            uint32_t pixel = src[column];
-            dst[column] = (pixel & 0xff000000U) |
-                          ((uint32_t) tp700_controls.lut[(pixel >> 16) & 0xff] << 16) |
-                          ((uint32_t) tp700_controls.lut[(pixel >> 8) & 0xff] << 8) |
-                          (uint32_t) tp700_controls.lut[pixel & 0xff];
+            dst[column] = tp700_lcd_pixel(src[column], lut);
         }
     }
     return tp700_controls.pixels;
@@ -513,7 +520,11 @@ sdl_real_blit(SDL_Rect *r_src)
     SDL_Rect r_dst;
     int      winx;
     int      winy;
-    const int tp700 = !strcmp(machine_get_internal_name(), "ibmtp700");
+    const int tp700 = machine_is_thinkpad_700();
+    const int monochrome = !strcmp(machine_get_internal_name(), "ibmtp700");
+    char expansion_option[] = "lcd_vertical_expansion";
+    const int vertical_expansion = tp700 && !monochrome &&
+                                   machine_get_config_int(expansion_option);
 
     /* VGA briefly reports the 80 text columns as an 80-pixel frame while a
        new text timing is being latched.  It is not a complete scanout; keep
@@ -557,7 +568,10 @@ sdl_real_blit(SDL_Rect *r_src)
             r_dst.h = winy;
         }
 
-        if (r_src->h < 480) {
+        /* Without LCD vertical expansion, preserve the source row height
+           within the fixed 480-line panel, including the 700C Reference
+           Diskette's 400-line text mode. */
+        if (!vertical_expansion && (r_src->h < 480)) {
             int active_height = (r_dst.h * r_src->h) / 480;
 
             if (active_height < 1)
@@ -575,7 +589,7 @@ sdl_real_blit(SDL_Rect *r_src)
          * through the count.  True 640x480 Windows graphics remains
          * pixel-for-pixel.
          */
-        if ((r_src->h == 400) &&
+        if (monochrome && (r_src->h == 400) &&
             ((r_src->w == 640) || (r_src->w == 720))) {
             int text_margin = r_dst.w / 80;
             int left_margin;
@@ -882,7 +896,7 @@ sdl_resize(int x, int y)
         return;
 
     /* The 9552 has one fixed-size LCD; guest mode changes occur inside it. */
-    if (!strcmp(machine_get_internal_name(), "ibmtp700")) {
+    if (machine_is_thinkpad_700()) {
         target_x = 640;
         target_y = 480;
     }

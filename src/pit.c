@@ -556,7 +556,7 @@ pit_write(uint16_t addr, uint8_t val, void *priv)
     int    t   = (addr & 3);
     ctr_t *ctr;
 
-    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if (machine_is_thinkpad_700() &&
         (((addr & 3) == 0) || ((addr & 3) == 3)))
         pclog("TP700 PIT WRITE: from=%04X:%04X port=%04X val=%02X "
               "ch0 l=%08X count=%08X mode=%u wm=%u state=%d out=%d\n",
@@ -829,7 +829,7 @@ pit_irq0_timer_ps2(int new_out, int old_out, UNUSED(void *priv))
     static unsigned tp700_irq0_edges    = 0;
 
     if (new_out && !old_out &&
-        !strcmp(machine_get_internal_name(), "ibmtp700") &&
+        machine_is_thinkpad_700() &&
         (CS == 0x0246) && (cpu_state.pc >= 0x0060) &&
         (cpu_state.pc <= 0x00a0)) {
         pit_t *dev = (pit_t *) pit_devs[0].data;
@@ -905,7 +905,7 @@ pit_nmi_timer_ps2(int new_out, UNUSED(int old_out), UNUSED(void *priv))
      * portable makes the firmware re-enter its NMI handler and stop at
      * F000:AF5F before IML starts.
      */
-    if (!strcmp(machine_get_internal_name(), "ibmtp700")) {
+    if (machine_is_thinkpad_700()) {
         nmi            = 0;
         nmi_auto_clear = 0;
         return;

@@ -402,6 +402,7 @@ extern int             machine_count(void);
 extern int             machine_available(int m);
 extern const char *    machine_getname(int m);
 extern const char *    machine_get_internal_name(void);
+extern int             machine_is_thinkpad_700(void);
 extern const char *    machine_get_nvr_name(void);
 extern int             machine_get_machine_from_internal_name(const char *s);
 extern void            machine_init(void);
@@ -1439,6 +1440,7 @@ extern int             machine_ps2_m30_286_init(const machine_t *);
 #ifdef EMU_DEVICE_H
 extern const device_t  ps2_model_50_device;
 extern const device_t  thinkpad_700_device;
+extern const device_t  thinkpad_700c_device;
 #endif
 extern int             machine_ps2_model_50_init(const machine_t *);
 extern int             machine_thinkpad_700_init(const machine_t *);

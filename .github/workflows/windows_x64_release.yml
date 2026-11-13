@@ -2,6 +2,13 @@ name: Windows x64 Release
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/windows_x64_release.yml
+      - src/**
+      - cmake/**
+      - CMakeLists.txt
+      - CMakePresets.json
   push:
     paths:
       - .github/workflows/windows_x64_release.yml
@@ -66,10 +73,15 @@ jobs:
       - name: Install portable files
         run: cmake --install build/windows-release
 
+      - name: Include public setup documentation
+        run: |
+          cp README.md README.zh-CN.md COPYING AUTHORS build/artifacts/
+          cp -r configs docs build/artifacts/
+
       - name: Upload portable artifact
         uses: actions/upload-artifact@v4
         with:
-          name: 86Box-ThinkPad700-Windows-x64-Release
+          name: 86Box-ThinkPad700-700C-Windows-x64-Release
           path: build/artifacts/**
           if-no-files-found: error
           retention-days: 14

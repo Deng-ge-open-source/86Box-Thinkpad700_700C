@@ -291,7 +291,7 @@ cpu_ibm_slc_cache_invalidate(void)
 {
     memset(ibm_slc_cache_valid, 0, sizeof(ibm_slc_cache_valid));
     memset(ibm_slc_cache_next, 0, sizeof(ibm_slc_cache_next));
-    if (0 && !strcmp(machine_get_internal_name(), "ibmtp700"))
+    if (0 && machine_is_thinkpad_700())
         pclog("TP700 SLC CACHE: invalidate at %04X:%04X\n",
               CS, (uint16_t) cpu_state.pc);
 }
@@ -310,7 +310,7 @@ cpu_ibm_slc_cache_read(uint32_t addr)
     if ((cpu_s == NULL) || (cpu_s->cpu_type != CPU_IBM486SLC))
         return;
 
-    if (0 && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if (0 && machine_is_thinkpad_700() &&
         (addr >= 0x0007c000) && (addr < 0x0007c040) &&
         (CS == 0xf000) && ((uint16_t) cpu_state.pc >= 0x0f30) &&
         ((uint16_t) cpu_state.pc <= 0x0f55))
@@ -319,7 +319,7 @@ cpu_ibm_slc_cache_read(uint32_t addr)
               (unsigned long long) msr.ibm_por,
               (unsigned long long) msr.ibm_crcr);
 
-    if (0 && !strcmp(machine_get_internal_name(), "ibmtp700") && msr.ibm_crcr &&
+    if (0 && machine_is_thinkpad_700() && msr.ibm_crcr &&
         (tp700_cache_calls++ < 64))
         pclog("TP700 SLC CACHE CALL: addr=%08X POR=%08llX CRCR=%016llX\n",
               addr, (unsigned long long) msr.ibm_por,
@@ -351,7 +351,7 @@ cpu_ibm_slc_cache_read(uint32_t addr)
         if (ibm_slc_cache_valid[set][way] &&
             (ibm_slc_cache_tag[set][way] == tag)) {
             /* A hit leaves CRLD unchanged. */
-            if (0 && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+            if (0 && machine_is_thinkpad_700() &&
                 (tp700_cache_traces++ < 128))
                 pclog("TP700 SLC CACHE: hit addr=%08X POR=%08llX "
                       "CRCR=%016llX\n", addr,
@@ -368,7 +368,7 @@ cpu_ibm_slc_cache_read(uint32_t addr)
 
     /* CRLD is set by hardware and remains set until software clears it. */
     msr.ibm_por |= 0x800;
-    if (0 && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if (0 && machine_is_thinkpad_700() &&
         (tp700_cache_traces++ < 128))
         pclog("TP700 SLC CACHE: miss addr=%08X POR=%08llX "
               "CRCR=%016llX\n", addr,
@@ -2797,7 +2797,7 @@ cpu_RDMSR(void)
                 /* Processor Operation Register */
                 case 0x1000:
                     EAX = msr.ibm_por & ((cpu_s->cpu_type > CPU_IBM386SLC) ? 0xffeff : 0xfeff);
-                    if (0 && !strcmp(machine_get_internal_name(), "ibmtp700"))
+                    if (0 && machine_is_thinkpad_700())
                         pclog("TP700 SLC RDMSR: POR=%08X cache=%d\n",
                               EAX, cpu_cache_int_enabled);
                     break;
@@ -3653,7 +3653,7 @@ cpu_WRMSR(void)
             switch (ECX) {
                 /* Processor Operation Register */
                 case 0x1000:
-                    if (0 && !strcmp(machine_get_internal_name(), "ibmtp700"))
+                    if (0 && machine_is_thinkpad_700())
                         pclog("TP700 SLC WRMSR: POR old=%08llX new=%08X\n",
                               (unsigned long long) msr.ibm_por, EAX);
                     msr.ibm_por           = EAX & ((cpu_s->cpu_type > CPU_IBM386SLC) ? 0xffeff : 0xfeff);
@@ -3661,7 +3661,7 @@ cpu_WRMSR(void)
                     break;
                 /* Cache Region Control Register */
                 case 0x1001:
-                    if (0 && !strcmp(machine_get_internal_name(), "ibmtp700"))
+                    if (0 && machine_is_thinkpad_700())
                         pclog("TP700 SLC WRMSR: CRCR old=%016llX new=%08X%08X\n",
                               (unsigned long long) msr.ibm_crcr, EDX, EAX);
                     msr.ibm_crcr = EAX | ((uint64_t) (EDX & 0x0000ffff) << 32);

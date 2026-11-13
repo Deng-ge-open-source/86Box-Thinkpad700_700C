@@ -83,6 +83,7 @@
 #include <86box/midi.h>
 #include <86box/snd_mpu401.h>
 #include <86box/video.h>
+#include <86box/vid_lcd.h>
 #include <86box/path.h>
 #include <86box/plat.h>
 #include <86box/plat_dir.h>
@@ -319,6 +320,8 @@ load_general(void)
     vid_cga_contrast = !!ini_section_get_int(cat, "vid_cga_contrast", 0);
     video_grayscale  = ini_section_get_int(cat, "video_grayscale", 0);
     video_graytype   = ini_section_get_int(cat, "video_graytype", 0);
+    tp700_lcd_brightness = tp700_lcd_clamp(ini_section_get_int(cat, "tp700_lcd_brightness", 100), 10, 200);
+    tp700_lcd_contrast = tp700_lcd_clamp(ini_section_get_int(cat, "tp700_lcd_contrast", 100), 25, 200);
 
     force_10ms = !!ini_section_get_int(cat, "force_10ms", 0);
 
@@ -1567,7 +1570,7 @@ load_hard_disks(void)
                  * The ThinkPad 700's ESDI firmware uses a translated
                  * 64-head geometry for its 345/64/32 system disk.
                  */
-                max_hpc    = !strcmp(machine_get_internal_name(), "ibmtp700") ? 64 : 16;
+                max_hpc    = machine_is_thinkpad_700() ? 64 : 16;
                 max_tracks = 266305;
                 break;
 
@@ -2921,6 +2924,15 @@ save_general(void)
         ini_section_delete_var(cat, "video_grayscale");
     else
         ini_section_set_int(cat, "video_grayscale", video_grayscale);
+
+    if (tp700_lcd_brightness == 100)
+        ini_section_delete_var(cat, "tp700_lcd_brightness");
+    else
+        ini_section_set_int(cat, "tp700_lcd_brightness", tp700_lcd_brightness);
+    if (tp700_lcd_contrast == 100)
+        ini_section_delete_var(cat, "tp700_lcd_contrast");
+    else
+        ini_section_set_int(cat, "tp700_lcd_contrast", tp700_lcd_contrast);
 
     if (video_graytype == 0)
         ini_section_delete_var(cat, "video_graytype");

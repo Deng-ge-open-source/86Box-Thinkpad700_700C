@@ -48,6 +48,7 @@ extern "C" {
 #include <86box/video.h>
 #include <86box/mouse.h>
 #include <86box/machine.h>
+#include <86box/vid_lcd.h>
 #include <86box/vid_ega.h>
 #include <86box/version.h>
 #include <86box/timer.h>
@@ -1532,6 +1533,30 @@ MainWindow::FindAcceleratorSeq(const char *name)
 bool
 MainWindow::eventFilter(QObject *receiver, QEvent *event)
 {
+    /* LCD controls belong to the host: consume the function key before it
+       reaches the guest, including key-up after modifiers are released. */
+    static unsigned lcdKeysDown = 0;
+    if (machine_is_thinkpad_700() &&
+        (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease)) {
+        auto *key = static_cast<QKeyEvent *>(event);
+        if (key->key() >= Qt::Key_F5 && key->key() <= Qt::Key_F9) {
+            const unsigned bit = 1U << (key->key() - Qt::Key_F5);
+            const auto modifiers = key->modifiers();
+            if ((lcdKeysDown & bit) ||
+                ((modifiers & Qt::ControlModifier) && (modifiers & Qt::ShiftModifier) &&
+                 !(modifiers & (Qt::AltModifier | Qt::MetaModifier)))) {
+                if (event->type() == QEvent::KeyPress) {
+                    lcdKeysDown |= bit;
+                    tp700_lcd_adjust(key->key() - Qt::Key_F5);
+                    ui->stackedWidget->update();
+                } else if (!key->isAutoRepeat())
+                    lcdKeysDown &= ~bit;
+                event->accept();
+                return true;
+            }
+        }
+    }
+
     // Detect shortcuts when menubar is hidden
     // TODO: Could this be simplified by proxying the event and manually
     // shoving it into the menubar?

@@ -538,7 +538,7 @@ class EmulatorGuestStatus:
                 data = json.load(stream)
             timestamp = float(data["timestamp_unix"])
             fresh = -5.0 <= time.time() - timestamp <= 0.75
-            if not fresh or data.get("machine") != "ibmtp700" or not data.get("running"):
+            if not fresh or data.get("machine") not in ("ibmtp700", "ibmtp700c") or not data.get("running"):
                 raise ValueError("stale or non-ThinkPad emulator status")
             self.cached = {
                 key: bool(data.get(key, False))

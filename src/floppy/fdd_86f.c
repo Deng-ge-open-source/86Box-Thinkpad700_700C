@@ -2198,7 +2198,7 @@ d86f_turbo_read(int drive, int side)
     else
         dat = (random_generate() & 0xff);
 
-    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if (machine_is_thinkpad_700() &&
         (drive == 0) && (dev->req_sector.id.c == 2) &&
         (dev->req_sector.id.h == 1) && (dev->req_sector.id.r == 9) &&
         ((dev->turbo_pos == 0) || (dev->turbo_pos == 511)))
@@ -2207,7 +2207,7 @@ d86f_turbo_read(int drive, int side)
               dev->turbo_pos, dev->state, dat, dma[2].ac, dma[2].cc,
               dma_m);
 
-    if (!strcmp(machine_get_internal_name(), "ibmtp700") && (drive == 0)) {
+    if (machine_is_thinkpad_700() && (drive == 0)) {
         const int planar_sector = (dev->req_sector.id.c == 72) &&
                                   (dev->req_sector.id.h == 1) &&
                                   (dev->req_sector.id.r == 12);
@@ -2527,7 +2527,7 @@ d86f_poll(int drive)
     mfm = fdc_is_mfm(d86f_fdc);
 
     tp700_d86f_polls[drive]++;
-    if (0 && !strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if (0 && machine_is_thinkpad_700() &&
         ((dev->state != tp700_d86f_state[drive]) ||
          ((dev->state != STATE_IDLE) &&
           ((tp700_d86f_polls[drive] % 10000) == 0)))) {
@@ -3419,7 +3419,7 @@ d86f_readaddress(int drive, UNUSED(int side), UNUSED(int rate))
 {
     d86f_t *dev = d86f[drive];
 
-    if (!strcmp(machine_get_internal_name(), "ibmtp700"))
+    if (machine_is_thinkpad_700())
         pclog("TP700 D86F READADDRESS: drive=%d before=%02X pos=%u "
               "wrong_densel=%d motor=%02llX\n",
               drive, dev->state, dev->track_pos, d86f_wrong_densel(drive),
@@ -3446,7 +3446,7 @@ d86f_readaddress(int drive, UNUSED(int side), UNUSED(int rate))
     } else
         dev->state = STATE_0A_FIND_ID;
 
-    if (!strcmp(machine_get_internal_name(), "ibmtp700"))
+    if (machine_is_thinkpad_700())
         pclog("TP700 D86F READADDRESS ARMED: drive=%d state=%02X pos=%u\n",
               drive, dev->state, dev->track_pos);
 }

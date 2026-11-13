@@ -1849,7 +1849,7 @@ mem_write_ramb_page(uint32_t addr, uint8_t val, page_t *page)
     if (page == NULL)
         return;
 
-    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if (machine_is_thinkpad_700() &&
         (addr == 0x000f7801) && (tp700_state_writes++ < 64))
         pclog("TP700 STATE WRITE B: %04X:%08X %02X->%02X\n",
               CS, cpu_state.oldpc, page->mem[addr & 0xfff], val);
@@ -1881,7 +1881,7 @@ mem_write_ramw_page(uint32_t addr, uint16_t val, page_t *page)
     if (page == NULL)
         return;
 
-    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if (machine_is_thinkpad_700() &&
         (addr <= 0x000f7801) && ((addr + 1) >= 0x000f7801) &&
         (tp700_state_writes++ < 64))
         pclog("TP700 STATE WRITE W: %04X:%08X addr=%08X %04X->%04X\n",
@@ -1925,7 +1925,7 @@ mem_write_raml_page(uint32_t addr, uint32_t val, page_t *page)
     if (page == NULL)
         return;
 
-    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if (machine_is_thinkpad_700() &&
         (addr <= 0x000f7801) && ((addr + 3) >= 0x000f7801) &&
         (tp700_state_writes++ < 64))
         pclog("TP700 STATE WRITE L: %04X:%08X addr=%08X %08X->%08X\n",
@@ -2026,7 +2026,7 @@ mem_write_ram(uint32_t addr, uint8_t val, UNUSED(void *priv))
     if (is_pcjr)
         pcjr_waitstates(NULL);
 
-    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if (machine_is_thinkpad_700() &&
         (addr == 0x000f7801) && (tp700_state_writes++ < 64))
         pclog("TP700 STATE MAP B: %04X:%08X %02X->%02X exec=%d\n",
               CS, cpu_state.oldpc, ram[addr], val, cpu_use_exec);
@@ -2047,7 +2047,7 @@ mem_write_ramw(uint32_t addr, uint16_t val, UNUSED(void *priv))
     if ((addr >= 0xa0000) && (addr <= 0xbffff))
         mem_log("Write W     %04X to   %08X\n", val, addr);
 #endif
-    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if (machine_is_thinkpad_700() &&
         (addr <= 0x000f7801) && ((addr + 1) >= 0x000f7801) &&
         (tp700_state_writes++ < 64))
         pclog("TP700 STATE MAP W: %04X:%08X addr=%08X %04X->%04X exec=%d\n",
@@ -2069,7 +2069,7 @@ mem_write_raml(uint32_t addr, uint32_t val, UNUSED(void *priv))
     if ((addr >= 0xa0000) && (addr <= 0xbffff))
         mem_log("Write L %08X to   %08X\n", val, addr);
 #endif
-    if (!strcmp(machine_get_internal_name(), "ibmtp700") &&
+    if (machine_is_thinkpad_700() &&
         (addr <= 0x000f7801) && ((addr + 3) >= 0x000f7801) &&
         (tp700_state_writes++ < 64))
         pclog("TP700 STATE MAP L: %04X:%08X addr=%08X %08X->%08X exec=%d\n",
