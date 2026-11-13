@@ -31,8 +31,7 @@ the firmware paths that the project set out to preserve.
 > This repository contains emulator source code only. IBM BIOS ROMs, Reference
 > Diskettes, diagnostics, operating systems, hard-disk images, and other
 > copyrighted software are **not** distributed here. Supply legally obtained
-> copies yourself. The local `local-assets/` directory is intentionally ignored
-> by Git. Private runtime and handoff bundles under `private-dist/` are ignored too.
+> copies yourself.
 
 ## Project status
 
