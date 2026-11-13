@@ -3658,6 +3658,7 @@ cpu_WRMSR(void)
                               (unsigned long long) msr.ibm_por, EAX);
                     msr.ibm_por           = EAX & ((cpu_s->cpu_type > CPU_IBM386SLC) ? 0xffeff : 0xfeff);
                     cpu_cache_int_enabled = (EAX & (1 << 7));
+                    cpu_update_waitstates();
                     break;
                 /* Cache Region Control Register */
                 case 0x1001:

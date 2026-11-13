@@ -10,6 +10,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <ctype.h>
 #define HAVE_STDARG_H
 #include <86box/86box.h>
@@ -29,7 +30,14 @@ typedef struct host_floppy_t {
     int      cached_track;
     int      cached_side;
     uint8_t  data[HOST_MAX_SECTORS * HOST_SECTOR_SIZE];
+    uint8_t *cache;
+    uint8_t  valid[80 * 2];
+    DWORD    media_generation;
+    ULONGLONG media_checked;
+    int      verify_supported;
     uint64_t bytes_read;
+    uint64_t read_calls;
+    uint64_t io_milliseconds;
 } host_floppy_t;
 
 static host_floppy_t host_floppies[FDD_NUM];
@@ -65,8 +73,10 @@ void
 floppy_ioctl_set_buffering(int enabled)
 {
     buffering_enabled = !!enabled;
-    for (int drive = 0; drive < FDD_NUM; drive++)
+    for (int drive = 0; drive < FDD_NUM; drive++) {
         host_floppies[drive].cached_track = -1;
+        memset(host_floppies[drive].valid, 0, sizeof(host_floppies[drive].valid));
+    }
 }
 
 int
@@ -84,14 +94,23 @@ floppy_ioctl_close(int drive)
         return;
     state = &host_floppies[drive];
     if (state->handle && state->handle != INVALID_HANDLE_VALUE) {
-        pclog("WIN FDD: closed %s, physical bytes read=%llu, writes=0\n",
-              state->path, (unsigned long long) state->bytes_read);
+        pclog("WIN FDD: closed %s, physical bytes read=%llu calls=%llu io_ms=%llu, writes=0\n",
+              state->path, (unsigned long long) state->bytes_read,
+              (unsigned long long) state->read_calls,
+              (unsigned long long) state->io_milliseconds);
         CloseHandle(state->handle);
     }
+    free(state->cache);
+    state->cache = NULL;
+    memset(state->valid, 0, sizeof(state->valid));
     state->handle       = NULL;
     state->tracks       = state->sides = state->sectors = 0;
     state->cached_track = state->cached_side = -1;
     state->bytes_read   = 0;
+    state->read_calls = state->io_milliseconds = 0;
+    state->verify_supported = 1;
+    state->media_generation = 0;
+    state->media_checked = 0;
 }
 
 int
@@ -162,6 +181,40 @@ floppy_ioctl_open(int drive, int *tracks, int *sides, int *sectors, int *rate)
     return 1;
 }
 
+/* Never serve a previous disk's cached sectors after a reported media change.
+   Rate-limit the Windows verification request; it is itself a USB operation. */
+static int
+host_floppy_check_media(host_floppy_t *state)
+{
+    const ULONGLONG now = GetTickCount64();
+    DWORD generation = 0;
+    DWORD returned = 0;
+
+    if (!state->verify_supported ||
+        (state->media_checked && now - state->media_checked < 1000))
+        return 1;
+    state->media_checked = now;
+    if (!DeviceIoControl(state->handle, IOCTL_STORAGE_CHECK_VERIFY2, NULL, 0,
+                         &generation, sizeof(generation), &returned, NULL)) {
+        const DWORD error = GetLastError();
+        if (error == ERROR_INVALID_FUNCTION || error == ERROR_NOT_SUPPORTED) {
+            state->verify_supported = 0;
+            return 1;
+        }
+        memset(state->valid, 0, sizeof(state->valid));
+        state->cached_track = -1;
+        /* Retry verification on the next read instead of trusting the cache. */
+        state->media_checked = 0;
+        return 0;
+    }
+    if (returned >= sizeof(generation) && generation != state->media_generation) {
+        memset(state->valid, 0, sizeof(state->valid));
+        state->cached_track = -1;
+        state->media_generation = generation;
+    }
+    return 1;
+}
+
 int
 floppy_ioctl_read_sector(int drive, int track, int side, int sector, uint8_t *buffer)
 {
@@ -169,6 +222,9 @@ floppy_ioctl_read_sector(int drive, int track, int side, int sector, uint8_t *bu
     LARGE_INTEGER offset;
     DWORD         requested;
     DWORD         actual;
+    uint8_t      *destination;
+    int           track_index;
+    ULONGLONG     started;
 
     if (drive < 0 || drive >= FDD_NUM || !buffer)
         return 0;
@@ -176,6 +232,17 @@ floppy_ioctl_read_sector(int drive, int track, int side, int sector, uint8_t *bu
     if (!state->handle || track < 0 || track >= state->tracks ||
         side < 0 || side >= state->sides || sector < 1 || sector > state->sectors)
         return 0;
+
+    if (!host_floppy_check_media(state))
+        return 0;
+    track_index = track * state->sides + side;
+    if (buffering_enabled && !state->cache)
+        state->cache = malloc(state->tracks * state->sides * state->sectors * HOST_SECTOR_SIZE);
+    if (buffering_enabled && state->cache && state->valid[track_index]) {
+        memcpy(buffer, state->cache + (track_index * state->sectors + sector - 1) * HOST_SECTOR_SIZE,
+               HOST_SECTOR_SIZE);
+        return 1;
+    }
 
     if (buffering_enabled && state->cached_track == track && state->cached_side == side) {
         memcpy(buffer, &state->data[(sector - 1) * HOST_SECTOR_SIZE], HOST_SECTOR_SIZE);
@@ -188,21 +255,28 @@ floppy_ioctl_read_sector(int drive, int track, int side, int sector, uint8_t *bu
         offset.QuadPart += sector - 1;
     offset.QuadPart *= HOST_SECTOR_SIZE;
     requested = buffering_enabled ? state->sectors * HOST_SECTOR_SIZE : HOST_SECTOR_SIZE;
+    destination = buffering_enabled && state->cache ?
+        state->cache + track_index * state->sectors * HOST_SECTOR_SIZE : state->data;
+    started = GetTickCount64();
     if (!SetFilePointerEx(state->handle, offset, NULL, FILE_BEGIN) ||
-        !ReadFile(state->handle, state->data, requested, &actual, NULL) || actual != requested) {
+        !ReadFile(state->handle, destination, requested, &actual, NULL) || actual != requested) {
         pclog("WIN FDD: read failed on %s C=%d H=%d S=%d, Windows error=%lu\n",
               state->path, track, side, sector, (unsigned long) GetLastError());
         return 0;
     }
+    state->read_calls++;
+    state->io_milliseconds += GetTickCount64() - started;
     state->bytes_read += actual;
     if (buffering_enabled) {
+        state->valid[track_index] = !!state->cache;
         state->cached_track = track;
         state->cached_side  = side;
     }
-    memcpy(buffer, &state->data[buffering_enabled ? (sector - 1) * HOST_SECTOR_SIZE : 0], HOST_SECTOR_SIZE);
-    pclog("WIN FDD: physical read %s C=%d H=%d S=%d bytes=%lu total=%llu\n",
+    memcpy(buffer, destination + (buffering_enabled ? (sector - 1) * HOST_SECTOR_SIZE : 0), HOST_SECTOR_SIZE);
+    pclog("WIN FDD: physical read %s C=%d H=%d S=%d bytes=%lu total=%llu calls=%llu io_ms=%llu\n",
           state->path, track, side, sector, (unsigned long) actual,
-          (unsigned long long) state->bytes_read);
+          (unsigned long long) state->bytes_read, (unsigned long long) state->read_calls,
+          (unsigned long long) state->io_milliseconds);
     return 1;
 }
 

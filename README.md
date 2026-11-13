@@ -246,11 +246,18 @@ fdd_01_host_device = \\.\A:
 fdd_host_buffering = 1
 ```
 
-Cold boot then reads the physical disk through the emulated floppy controller.
+Cold boot first tries the physical disk through the emulated floppy controller.
+If no host disk can be mounted, the ThinkPad completes POST and boots the
+configured hard-disk image. The host-drive selection is retried on the next
+cold start. A mounted but non-bootable disk still follows the firmware's error
+path; an unreadable disk is not treated as a successful boot.
 Windows must already be running; the 700/700C ROM executes inside 86Box.
-The selection survives a restart. After swapping disks, remount the drive using
+Host-backed drives automatically suppress sampled floppy sounds. Hard-disk sounds and image-backed floppy sounds retain their
+configured levels. The read cache retains previously visited tracks in memory
+and is invalidated when Windows reports a media change. After swapping disks,
+remount the drive using
 **Media → Floppy → Use Host Floppy Drive**, or restart the VM, to discard its
-temporary track cache. Windows device access may require an elevated process.
+cache explicitly. Windows device access may require an elevated process.
 This does not provide USB passthrough or low-level physical-drive diagnostics.
 The 700C Reference Diskette has been booted from a TEAC USB UF000x drive on
 Windows x64; see the [physical-media verification](docs/VERIFICATION.md#windows-physical-usb-floppy--2026-11-13).

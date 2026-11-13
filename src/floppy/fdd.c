@@ -656,6 +656,20 @@ fdd_get_densel(int drive)
     return fdd[drive].densel;
 }
 
+int
+fdd_is_host(int drive)
+{
+    const char *name;
+
+    if (drive < 0 || drive >= FDD_NUM)
+        return 0;
+    name = floppyfns[drive];
+    if (!strncmp(name, "wp://", 5))
+        name += 5;
+    return !strncmp(name, "ioctl://", 8) ||
+           (!name[0] && fdd_get_host_device(drive)[0]);
+}
+
 void
 fdd_load(int drive, char *fn)
 {

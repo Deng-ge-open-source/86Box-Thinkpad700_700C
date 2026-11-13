@@ -9,6 +9,7 @@ on:
       - cmake/**
       - CMakeLists.txt
       - CMakePresets.json
+      - tools/thinkpad700/tests/test_win_host_floppy.c
   push:
     paths:
       - .github/workflows/windows_x64_release.yml
@@ -16,6 +17,7 @@ on:
       - cmake/**
       - CMakeLists.txt
       - CMakePresets.json
+      - tools/thinkpad700/tests/test_win_host_floppy.c
 
 permissions:
   contents: read
@@ -69,6 +71,13 @@ jobs:
 
       - name: Build
         run: cmake --build build/windows-release
+
+      - name: Check read-only host floppy caching
+        run: |
+          mkdir -p build/thinkpad-tests
+          gcc -O2 -Isrc/include tools/thinkpad700/tests/test_win_host_floppy.c \
+            -o build/thinkpad-tests/win-host-floppy.exe
+          ./build/thinkpad-tests/win-host-floppy.exe
 
       - name: Install portable files
         run: cmake --install build/windows-release

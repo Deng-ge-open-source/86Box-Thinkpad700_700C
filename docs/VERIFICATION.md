@@ -82,6 +82,61 @@ Only a 1.44 MB physical Reference Diskette and this USB drive were tested.
 removal while reading, physical formatting and the complete diagnostic suite
 remain unverified. Physical writes/formatting are intentionally unsupported.
 
+## Host-floppy/cache follow-up — 2026-11-13
+
+The TEAC read-only probe was repeated after expanding the cache from one
+head/track to previously visited tracks. Five reads of the same cylinder took
+3,875 ms / ten physical reads / 92,160 bytes before, versus 750 ms / two reads /
+18,432 bytes after. This measures repeated-track access, not whole-boot speed.
+Controller seek-completion timing is retained: removing that delay caused a
+Reference boot regression during development and was not retained.
+
+The Windows storage-driver mock regression checks track revisits, cache
+invalidation after a reported media change or removal, unbuffered sector reads,
+CHS bounds, fixed-volume rejection and read-only access without opening hardware.
+The real A: boot/root/bounds/write-protection probe also passed again.
+
+With a configured but nonexistent host drive, the original 700C completed POST
+and the post-POST INT 19h handoff entered the hard-disk image's color Windows 3.2.
+The host path remained configured for the next cold boot. This exercises mount
+failure without removing the user's real disk; physical removal during a read
+was tested only in the mock, not on the TEAC.
+
+The game installed on the user's HDD identifies itself as Flight Simulator
+5.1, despite the initial report of 5.0. A separate working copy booted pure DOS
+and entered its color cockpit at IBM 486SLC/25; the emulator indicated 100%
+speed. This is not an in-game frame-rate measurement or a comparison against
+the same scene on a physical 700C. Game settings and the user's HDD were not
+modified for this test.
+
+Live CPU inspection found POR.CE enabled while prefetch timing remained six
+cycles and legacy recompilation was blocked by CR0.CD. CR0 mode switches could
+also clear the emulator's cache-enable state despite POR remaining enabled.
+After correction, the DOS game retained cache enable with zero prefetch penalty.
+The banked E000/F000 ThinkPad firmware stays interpreted so its per-instruction
+controller and wait-loop hooks are preserved. Cached DOS/Windows RAM code
+remains eligible for recompilation.
+Windows 3.2 color startup also passed. A separate Windows-standard-mode game
+autostart test reached the game splash but did not reliably enter the cockpit;
+it is not recorded as passing. The current CONFIG.SYS has no EMS manager and
+AUTOEXEC uses WIN /S. Microsoft's original
+[FS 5.1 notes](https://jeffpar.github.io/kbarchive/kb/132/Q132944/)
+require EMS for running inside Windows and recommend pure DOS for smoother play.
+
+Fresh-state testing reproduced a CP67 delay of about 64 seconds. The integrated
+700C ESDI controller powered up at arbitration 5 while POST configured DMA channel 0
+for arbitration E, leaving WRITE BUFFER waiting for a channel until timeout.
+The matching IBM @DF9F configuration file recommends E; the controller now
+powers up at E on the 700C, while the monochrome default remains 5 and later
+POS writes can still select other levels. In the corrected 700C run, CP67 to
+CP68 took 144 ms. The physical Reference Diskette reached its main menu
+without the 00174 warning seen with the mismatched default; the monochrome
+700 also reached its own main menu.
+
+The final Qt Release build, DMA regression, Windows host-floppy mock and
+public-tree checks passed. The monochrome 700 image-backed boot also reached
+the known Reference Diskette idle trace with its F1EE identity.
+
 ## Repeat the source-only checks
 
 From the repository root, with Python 3 and GCC available:
@@ -94,6 +149,13 @@ gcc -O2 -fwhole-program -Isrc/include -Isrc/cpu -ffunction-sections -fdata-secti
   tools/thinkpad700/tests/test_dma_arbitration.c -Wl,--gc-sections \
   -o build/thinkpad-tests/dma-arbitration
 ./build/thinkpad-tests/dma-arbitration
+```
+
+On Windows with GCC, also run the hardware-free host-floppy regression:
+
+```powershell
+gcc -O2 -Isrc/include tools/thinkpad700/tests/test_win_host_floppy.c -o build/thinkpad-tests/win-host-floppy.exe
+./build/thinkpad-tests/win-host-floppy.exe
 ```
 
 The DMA test checks arbitration E reassignment, enabled/masked channel selection
