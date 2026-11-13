@@ -252,8 +252,11 @@ configured hard-disk image. The host-drive selection is retried on the next
 cold start. A mounted but non-bootable disk still follows the firmware's error
 path; an unreadable disk is not treated as a successful boot.
 Windows must already be running; the 700/700C ROM executes inside 86Box.
-Host-backed drives automatically suppress sampled floppy sounds. Hard-disk sounds and image-backed floppy sounds retain their
-configured levels. The read cache retains previously visited tracks in memory
+Host-backed drives automatically suppress sampled floppy sounds. Hard-disk
+sounds and image-backed floppy sounds retain their configured levels. On Windows,
+the HDD sound worker follows host time while a physical floppy is selected,
+so synchronous USB reads do not interrupt the spindle sound. Pausing the VM
+still pauses sound production. The read cache retains visited tracks in memory
 and is invalidated when Windows reports a media change. After swapping disks,
 remount the drive using
 **Media → Floppy → Use Host Floppy Drive**, or restart the VM, to discard its

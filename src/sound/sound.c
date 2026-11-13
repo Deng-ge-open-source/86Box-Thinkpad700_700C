@@ -38,6 +38,9 @@
 #include <86box/sound.h>
 #include <86box/fdd_audio.h>
 #include <86box/hdd_audio.h>
+#ifdef _WIN32
+#include <86box/fdd.h>
+#endif
 
 typedef struct {
     const device_t *device;
@@ -904,13 +907,46 @@ sound_fdd_thread_end(void)
 static void
 sound_hdd_thread(UNUSED(void *param))
 {
+#ifdef _WIN32
+    const uint32_t host_period_ms = SOUNDBUFLEN * 1000 / SOUND_FREQ;
+    uint32_t host_next_buffer = plat_get_ticks() + host_period_ms;
+#endif
     thread_set_event(sound_hdd_start_event);
     while (hddaudioon) {
-        thread_wait_event(sound_hdd_event, -1);
+        int timeout = -1;
+#ifdef _WIN32
+        int host_floppy = 0;
+        for (int drive = 0; drive < FDD_NUM; drive++)
+            host_floppy |= fdd_is_host(drive);
+        if (host_floppy) {
+            const int32_t remaining = (int32_t) (host_next_buffer - plat_get_ticks());
+            timeout = remaining > 0 ? remaining : 0;
+        }
+#endif
+        thread_wait_event(sound_hdd_event, timeout);
         thread_reset_event(sound_hdd_event);
 
         if (!hddaudioon)
             break;
+
+#ifdef _WIN32
+        if (host_floppy) {
+            const uint32_t now = plat_get_ticks();
+            /* USB reads can block the emulation timer for hundreds of ms.
+               Pace the independent HDD mixer by host time so the spindle
+               keeps running, without speeding it up on early guest events. */
+            if (dopause) {
+                host_next_buffer = now + host_period_ms;
+                continue;
+            }
+            if ((int32_t) (now - host_next_buffer) < 0)
+                continue;
+            host_next_buffer += host_period_ms;
+            if ((int32_t) (now - host_next_buffer) >= (int32_t) host_period_ms)
+                host_next_buffer = now + host_period_ms;
+        } else
+            host_next_buffer = plat_get_ticks() + host_period_ms;
+#endif
 
         static float hdd_float_buffer[SOUNDBUFLEN * 2];
         memset(hdd_float_buffer, 0, sizeof(hdd_float_buffer));

@@ -1,5 +1,15 @@
 # Update notes
 
+## 2026-11-13 — Keep HDD audio playing during USB reads
+
+On Windows, selecting a physical floppy now gives the HDD sound worker a
+20 ms host-clock cadence. It no longer depends on emulation-timer notifications
+that stop during synchronous USB reads. Early guest events do not accelerate
+playback; VM pause and image-only scheduling retain their existing behavior.
+
+Windows 实体软驱模式下，硬盘音效改为按宿主时间每 20 ms 续播，避免 USB 读盘阻塞
+模拟时钟时主轴声断续。过早的客机通知不会加快播放；暂停和纯镜像模式保持原行为。
+
 ## 2026-11-13 — Host-floppy boot order and SLC cache handling
 
 - Retain host-drive selection when media is absent; after POST, fall back to

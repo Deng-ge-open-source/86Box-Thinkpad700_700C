@@ -137,6 +137,29 @@ The final Qt Release build, DMA regression, Windows host-floppy mock and
 public-tree checks passed. The monochrome 700 image-backed boot also reached
 the known Reference Diskette idle trace with its F1EE identity.
 
+## HDD audio during a host read — 2026-11-13
+
+The HDD mixer had its own thread but waited indefinitely for emulation-timer
+events. A synchronous USB read prevented those events from being produced;
+the 80 ms output queue could empty while a track read took hundreds of ms.
+In Windows host-floppy mode, the existing worker now uses a 20 ms host-clock
+deadline, coalesces early guest events and honors VM pause. Image-only mode
+keeps its original event-driven scheduling.
+
+A deterministic test runs the real worker with no guest events after 50 ms
+and a 400 ms pause during a two-second interval. The old worker produces zero
+blocks; the corrected worker produces 79, resumes after pause, and never sends
+blocks faster than the configured cadence. Image-only idle still waits for an
+event. The test uses no firmware, media or audio device.
+
+A second test cold-booted separate muted VMs from an offline snapshot with the
+real TEAC and Reference Diskette, leaving the user's running VM untouched. A
+read-only probe sampled the HDD worker's actual PCM buffer every 5 ms for
+45 seconds. The old worker had twelve intervals above 100 ms with no new PCM
+(longest 1,379 ms); the corrected worker had none (longest observed interval
+73 ms). This measures PCM production during real USB I/O, not a separate
+perceptual listening test or a guarantee against every host scheduling stall.
+
 ## Repeat the source-only checks
 
 From the repository root, with Python 3 and GCC available:
@@ -156,7 +179,12 @@ On Windows with GCC, also run the hardware-free host-floppy regression:
 ```powershell
 gcc -O2 -Isrc/include tools/thinkpad700/tests/test_win_host_floppy.c -o build/thinkpad-tests/win-host-floppy.exe
 ./build/thinkpad-tests/win-host-floppy.exe
+gcc -O2 -fwhole-program -ffunction-sections -fdata-sections -Isrc/include -Isrc/cpu -Ibuild/windows-700c/src/include tools/thinkpad700/tests/test_hdd_audio_host_wait.c -Wl,--gc-sections -lm -o build/thinkpad-tests/hdd-audio-host-wait.exe
+./build/thinkpad-tests/hdd-audio-host-wait.exe
 ```
+
+The HDD worker test uses the generated headers from the configured build tree;
+adjust `build/windows-700c` if your build directory differs.
 
 The DMA test checks arbitration E reassignment, enabled/masked channel selection
 and legacy fallback against the actual DMA implementation. These checks need no

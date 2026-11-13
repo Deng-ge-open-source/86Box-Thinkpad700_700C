@@ -10,6 +10,7 @@ on:
       - CMakeLists.txt
       - CMakePresets.json
       - tools/thinkpad700/tests/test_win_host_floppy.c
+      - tools/thinkpad700/tests/test_hdd_audio_host_wait.c
   push:
     paths:
       - .github/workflows/windows_x64_release.yml
@@ -18,6 +19,7 @@ on:
       - CMakeLists.txt
       - CMakePresets.json
       - tools/thinkpad700/tests/test_win_host_floppy.c
+      - tools/thinkpad700/tests/test_hdd_audio_host_wait.c
 
 permissions:
   contents: read
@@ -78,6 +80,11 @@ jobs:
           gcc -O2 -Isrc/include tools/thinkpad700/tests/test_win_host_floppy.c \
             -o build/thinkpad-tests/win-host-floppy.exe
           ./build/thinkpad-tests/win-host-floppy.exe
+          gcc -O2 -fwhole-program -ffunction-sections -fdata-sections \
+            -Isrc/include -Isrc/cpu -Ibuild/windows-release/src/include \
+            tools/thinkpad700/tests/test_hdd_audio_host_wait.c -Wl,--gc-sections -lm \
+            -o build/thinkpad-tests/hdd-audio-host-wait.exe
+          ./build/thinkpad-tests/hdd-audio-host-wait.exe
 
       - name: Install portable files
         run: cmake --install build/windows-release
