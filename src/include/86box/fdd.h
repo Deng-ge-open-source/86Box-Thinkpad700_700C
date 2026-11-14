@@ -107,6 +107,7 @@ extern int     fdd_time;
 extern int64_t floppytime;
 
 extern void fdd_load(int drive, char *fn);
+extern int  fdd_is_host(int drive);
 extern void fdd_new(int drive, char *fn);
 extern void fdd_close(int drive);
 extern void fdd_init(void);

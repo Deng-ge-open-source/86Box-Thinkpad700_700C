@@ -201,11 +201,15 @@ opMOV_CRx_r_a16(uint32_t fetchdat)
             cr0 = cpu_state.regs[cpu_rm].l;
             if (cpu_16bitbus)
                 cr0 |= 0x10;
-            if (hascache && !(cr0 & (1 << 30)))
+            /* IBM SLC cache enable is controlled by POR, including while
+               switching between DOS real mode and Windows protected mode. */
+            if (isibm486)
+                cpu_cache_int_enabled = !!(msr.ibm_por & (1 << 7));
+            else if (hascache && !(cr0 & (1 << 30)))
                 cpu_cache_int_enabled = 1;
             else
                 cpu_cache_int_enabled = 0;
-            if (hascache && ((cr0 ^ old_cr0) & (1 << 30)))
+            if (!isibm486 && hascache && ((cr0 ^ old_cr0) & (1 << 30)))
                 cpu_update_waitstates();
             if (cr0 & 1)
                 cpu_cur_status |= CPU_STATUS_PMODE;
@@ -265,11 +269,15 @@ opMOV_CRx_r_a32(uint32_t fetchdat)
             cr0 = cpu_state.regs[cpu_rm].l;
             if (cpu_16bitbus)
                 cr0 |= 0x10;
-            if (hascache && !(cr0 & (1 << 30)))
+            /* IBM SLC cache enable is controlled by POR, including while
+               switching between DOS real mode and Windows protected mode. */
+            if (isibm486)
+                cpu_cache_int_enabled = !!(msr.ibm_por & (1 << 7));
+            else if (hascache && !(cr0 & (1 << 30)))
                 cpu_cache_int_enabled = 1;
             else
                 cpu_cache_int_enabled = 0;
-            if (hascache && ((cr0 ^ old_cr0) & (1 << 30)))
+            if (!isibm486 && hascache && ((cr0 ^ old_cr0) & (1 << 30)))
                 cpu_update_waitstates();
             if (cr0 & 1)
                 cpu_cur_status |= CPU_STATUS_PMODE;

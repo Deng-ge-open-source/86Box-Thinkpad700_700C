@@ -16,14 +16,15 @@
 
 1. 将 ZIP **完整解压**到新的固定目录，不要直接在压缩包中运行。
 2. 双击根目录的 **`Start-ThinkPad-700C.bat`**。
-3. 模拟器默认全屏，保持 4:3。冷启动先进入 **700C Reference Diskette 1.20**。
-4. 在参考盘选择 **Start operating system**，确认后启动硬盘上的中文 Windows 3.2。
+3. 模拟器默认全屏，保持 4:3。实体软驱配置优先读取 `A:` 中的软盘；插入 700C
+   Reference Diskette 时先进入参考盘，没有可挂载的实体盘时，自检后启动硬盘镜像。
+4. 在参考盘选择 **Start operating system**，确认后也可启动硬盘上的中文 Windows 3.2。
 
 无需重新安装原包中的 Windows 或驱动。首次运行前可执行文件校验，见下文。
 不要将本包的可写硬盘/NVRAM 同时挂载到另一个运行中的模拟器。
 
-开机显示递增内存计数和 CP 检查点属于原始固件行为。16 MiB 配置实测完整 POST
-约 38 秒，其中内存检查约 32 秒；CP67 在本地计时中立即通过，没有跳过自检。
+开机显示递增内存计数和 CP 检查点属于原始固件行为，不跳过自检。耗时会随配置、
+CPU 缓存状态与实体盘读取情况变化，不能用历史版本的固定秒数判断是否卡死。
 
 ## 本次 update
 
@@ -34,7 +35,18 @@
 - 参考盘 640×400 内容居中，上下各留 40 个原始面板行；Windows 640×480 铺满面板。
 - 增加纯键盘亮度和对比度调节，画面不加按钮、滑条、数值或提示。
 - 正常运行不再反复扫描全内存查找旧 IML 标识；原始固件测试保留。
+- 实体软驱保留磁道读取缓存，并自动关闭模拟软驱音效。
+  实体盘只读，不支持写入或格式化；硬盘音效保留，运行包使用最大 **+18 dB** 增益。
+- Windows 实体软驱模式下，硬盘音效由宿主时间续播，USB 读取不会再使主轴声跟着停顿；
+  暂停虚拟机仍会暂停声音生成。
+- 修正 IBM SLC 缓存启用、预取计时和 Windows 模式切换衔接，保留 25 MHz CPU 配置。
+- 修正 ESDI 上电仲裁级别，使其与自检的 E 级 DMA 配置一致，避免 CP67 约 64 秒超时。
 - 公共中英文 README、更新说明和验证记录与本次源码同步。
+
+Flight Simulator 5.x 是 DOS 程序。当前系统使用 `WIN /S` 标准模式且未配置 EMS；
+Windows 内启动不作为已验证的稳定游戏路径。游戏建议退出 Windows 后在纯 DOS 执行
+`CD \FLTSIM5`、`FS5`。本次用工作副本实测 FS 5.1 进入彩色驾驶舱；未校准实体机同场景
+帧率，模拟器的 100% 速度也不等于游戏帧率。
 
 ## 快捷键
 
@@ -120,8 +132,11 @@ Windows 增强模式、扩展显卡加速、完整 IBM 硬件诊断和所有可�
 
 ## English quick start
 
-Extract the entire ZIP, then run `Start-ThinkPad-700C.bat`. Cold boot enters the
-700C Reference Diskette; choose **Start operating system** for Windows 3.2.
+Extract the entire ZIP, then run `Start-ThinkPad-700C.bat`. With a host floppy
+selected, cold boot tries its physical disk first, then the hard-disk image if
+no disk can be mounted. From the 700C Reference Diskette, choose **Start
+operating system** for Windows 3.2. Physical media are read-only; sampled floppy
+sounds are suppressed automatically, while HDD audio retains +18 dB gain.
 Ctrl+Shift+F5/F6 adjusts brightness, F7/F8 contrast and F9 restores original colors.
 There are no added controls or overlays on the guest display. This private bundle
 contains locally supplied IBM media; keep it off public repositories.

@@ -1694,8 +1694,11 @@ esdi_init(UNUSED(const device_t *info))
         dev->pos_regs[0] = 0x9f;
         dev->pos_regs[1] = 0xdf;
         if (machine_is_thinkpad_700()) {
-            /* @DF9F factory defaults on the 9552 planar. */
-            dev->pos_regs[2] = 0x55; /* enabled, primary I/O, DMA 5 */
+            /* The 700C POST programs arbitration E before restoring adapter
+               configuration, matching @DF9F's recommendation. Retain the
+               monochrome 700's level-5 power-on configuration. */
+            dev->pos_regs[2] = !strcmp(machine_get_internal_name(), "ibmtp700c") ?
+                               0x79 : 0x55; /* enabled, primary I/O, E or 5 */
             dev->pos_regs[3] = 0x20; /* 24 us DMA burst pacing */
             dev->pos_regs[4] = 0x04; /* pacing on, 6 us release */
         }

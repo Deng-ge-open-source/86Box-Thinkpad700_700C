@@ -771,7 +771,7 @@ fdd_audio_close(void)
 void
 fdd_audio_set_motor_enable(int drive, int motor_enable)
 {
-    if (!fdd_sounds_enabled || fdd_get_turbo(drive))
+    if (!fdd_sounds_enabled || fdd_get_turbo(drive) || fdd_is_host(drive))
         return;
 
     drive_audio_samples_t *samples = get_drive_samples(drive);
@@ -810,7 +810,7 @@ fdd_audio_set_motor_enable(int drive, int motor_enable)
 void
 fdd_audio_play_multi_track_seek(int drive, int from_track, int to_track)
 {
-    if (!fdd_sounds_enabled || fdd_get_turbo(drive))
+    if (!fdd_sounds_enabled || fdd_get_turbo(drive) || fdd_is_host(drive))
         return;
 
     if (drive < 0 || drive >= FDD_NUM)
@@ -956,6 +956,8 @@ fdd_audio_callback(int16_t *buffer, int length)
     /* Check if any motor is running or transitioning, or any audio is active */
     int any_audio_active = 0;
     for (int drive = 0; drive < FDD_NUM; drive++) {
+        if (fdd_is_host(drive))
+            continue;
         if (spindlemotor_state[drive] != MOTOR_STATE_STOPPED) {
             any_audio_active = 1;
             break;
@@ -980,6 +982,8 @@ fdd_audio_callback(int16_t *buffer, int length)
     /* Process audio for all drives */
     if (sound_is_float) {
         for (int drive = 0; drive < FDD_NUM; drive++) {
+            if (fdd_is_host(drive))
+                continue;
             drive_audio_samples_t *samples = get_drive_samples(drive);
             if (!samples)
                 continue;
@@ -1092,6 +1096,8 @@ fdd_audio_callback(int16_t *buffer, int length)
     } else {
         /* int16 version - similar changes */
         for (int drive = 0; drive < FDD_NUM; drive++) {
+            if (fdd_is_host(drive))
+                continue;
             drive_audio_samples_t *samples = get_drive_samples(drive);
             if (!samples)
                 continue;

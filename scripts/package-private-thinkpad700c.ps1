@@ -62,6 +62,16 @@ foreach ($relative in $runtimeFiles) {
 Copy-Item -LiteralPath $BinaryPath -Destination (Join-Path $outputRoot '86Box.exe')
 Copy-Item -LiteralPath (Join-Path $repoRoot 'COPYING') -Destination $outputRoot
 Copy-Item -LiteralPath (Join-Path $repoRoot 'AUTHORS') -Destination $outputRoot
+# Preserve the installed drive-audio library and its provenance when present.
+# These are explicit asset locations, never the whole development workspace.
+foreach ($relative in @('assets/sounds/fdd', 'assets/sounds/hdd', 'assets/LICENSE-86Box-assets.txt', 'DRIVE-AUDIO.json')) {
+    $audioSource = Join-Path $sourceRoot $relative
+    if (Test-Path -LiteralPath $audioSource) {
+        $audioDestination = Join-Path $outputRoot $relative
+        New-Item -ItemType Directory -Path (Split-Path -Parent $audioDestination) -Force | Out-Null
+        Copy-Item -LiteralPath $audioSource -Destination $audioDestination -Recurse
+    }
+}
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'verify-private-package.ps1') -Destination (Join-Path $outputRoot 'Verify-Package.ps1')
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'create-private-shortcut.ps1') -Destination (Join-Path $outputRoot 'Create-Desktop-Shortcut.ps1')
 $launcher = @'
@@ -83,7 +93,7 @@ New-Item -ItemType Directory -Path (Join-Path $verificationFolder 'images') -For
 foreach ($doc in @('VERIFICATION.md', 'RELEASE-NOTES.md')) {
     Copy-Item -LiteralPath (Join-Path $repoRoot "docs/$doc") -Destination $verificationFolder
 }
-foreach ($capture in @('reference-proportions', 'error-log-empty', 'windows-color', '256-color-test')) {
+foreach ($capture in @('reference-proportions', 'error-log-empty', 'windows-color', '256-color-test', 'usb-floppy-reference')) {
     Copy-Item -LiteralPath (Join-Path $repoRoot "docs/images/thinkpad700c-$capture.png") -Destination (Join-Path $verificationFolder 'images')
 }
 

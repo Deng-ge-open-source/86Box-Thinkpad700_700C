@@ -1,5 +1,67 @@
 # Update notes
 
+## 2026-11-14 — USB floppy and performance update
+
+This publication brings the read-only Windows USB-floppy backend, boot-order
+handling, track cache, 700C ESDI startup correction and SLC cache fixes together
+on main. HDD audio now continues during USB reads, and the private packager
+preserves installed sound assets and their license/provenance.
+
+The original README introduction and physical-machine photos are retained.
+Only public source, documentation and selected screenshots are published;
+private runtime ZIPs remain local. The verified game path is Flight Simulator
+5.1 in pure DOS, with the original 25 MHz configuration; this is not a measured
+frame-rate comparison against physical hardware. See [verification](VERIFICATION.md).
+
+此次发布整合 Windows USB 实体软盘只读访问、启动顺序、磁道缓存、700C ESDI 上电
+仲裁和 SLC 缓存修正；USB 读盘时硬盘声音保持续播，私人打包保留已安装的音效资源
+及其许可证和来源信息。
+
+保留 README 原有开头、实体机照片和整体结构。公开内容仅含源码、文档及精选截图，
+私人运行 ZIP 留在本地。游戏验证使用原 25 MHz 配置下的纯 DOS 模拟飞行 5.1，
+未据此宣称达到实体机同场景帧率，详见[验证记录](VERIFICATION.md)。
+
+## 2026-11-13 — Keep HDD audio playing during USB reads
+
+On Windows, selecting a physical floppy now gives the HDD sound worker a
+20 ms host-clock cadence. It no longer depends on emulation-timer notifications
+that stop during synchronous USB reads. Early guest events do not accelerate
+playback; VM pause and image-only scheduling retain their existing behavior.
+
+Windows 实体软驱模式下，硬盘音效改为按宿主时间每 20 ms 续播，避免 USB 读盘阻塞
+模拟时钟时主轴声断续。过早的客机通知不会加快播放；暂停和纯镜像模式保持原行为。
+
+## 2026-11-13 — Host-floppy boot order and SLC cache handling
+
+- Retain host-drive selection when media is absent; after POST, fall back to
+  the hard-disk image and retry the physical drive on the next cold start.
+- Correct integrated ESDI power-on arbitration to E, matching the 9552 POST
+  and IBM's recommended configuration. A level-5 default could leave the
+  CP67 buffer test waiting about 64 seconds for DMA.
+- Cache previously visited physical tracks, invalidate on reported media
+  changes. Controller seek completion timing is retained.
+- Suppress sampled floppy sounds automatically while a host drive is selected;
+  image-backed floppy profiles and hard-disk sounds remain available.
+- Refresh IBM SLC prefetch timing when POR.CE changes. Preserve POR cache
+  enable across CR0 writes and use it for legacy recompiler eligibility.
+  Intel cache control remains based on CR0.CD. Cache-tag diagnostics and
+  banked ThinkPad firmware keep their interpreter hooks.
+- Add a Windows storage-driver mock regression covering cached track revisits,
+  media replacement/removal, geometry bounds and read-only access.
+
+### 中文更新说明
+
+实体盘缺席时保留软驱选择，自检后回退硬盘镜像，下次冷启动重新探测。实体盘读取会
+缓存访问过的磁道，报告换盘时清除；保留控制器寻道完成时序，并自动关闭模拟软驱
+音效。硬盘音效和镜像软盘的音效配置保留。
+
+集成 ESDI 控制器的上电仲裁级别改为原配置说明推荐的 E，匹配 9552 自检，修正
+默认级别 5 导致 CP67 缓冲区测试等待约 64 秒超时的问题。
+
+修正 IBM SLC 的 POR 缓存开关与预取计时、CR0 模式切换和旧动态重编译器的衔接，
+保留缓存诊断使用解释执行。CPU 仍为原配置的 25 MHz。新增无需真实软盘的 Windows
+存储驱动模拟回归，覆盖缓存、换盘/移盘、边界及只读访问。
+
 ## 2026-11-13 — ThinkPad 700C color and private handoff
 
 The 700C now has its own machine definition, original F1EC firmware identity,

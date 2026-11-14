@@ -1767,6 +1767,20 @@ x86_int_sw(int num)
     static unsigned tp700_sw_int1c_traces = 0;
     static int      tp700_int13_caller_dumped = 0;
 
+    /* Host-floppy boot order is A: then the configured HDD image. The ROM
+       reaches INT 19h after completing POST; retain that hardware state for
+       the existing fixed-disk bootstrap if no physical media was mounted. */
+    if ((num == 0x19) && (CS == 0xf000) && machine_is_thinkpad_700() &&
+        fdd_is_host(0) && drive_empty[0] && hdd_is_valid(0)) {
+        tp700_service_window = 0;
+        tp700_reference_floppy_boot = 0;
+        if (tp700_boot_hdd_post()) {
+            pclog("TP700 BOOT: no host floppy media, starting HDD after POST\n");
+            CPU_BLOCK_END();
+            return;
+        }
+    }
+
     /*
      * IBM's ESDI system-partition extension can reduce the drive's reported
      * last RBA while leaving the physical medium intact.  Zero means that no

@@ -333,10 +333,18 @@ fetch_ea_16_long(uint32_t rmdat)
 
 #include "386_ops.h"
 
+/* IBM SLC cache enable lives in POR, rather than the Intel 486 CR0.CD bit.
+   Keep cache-tag diagnostics and the ThinkPad's banked E000/F000 firmware
+   interpreted: its controller/wait-loop hooks run in the instruction loop.
+   Cached DOS/Windows code in RAM can use the recompiler after POR.CE is set. */
+#define IBM_CODE_CACHE_ON() (cpu_cache_int_enabled && !cpu_ibm_slc_cache_tracking && \
+                            (!machine_is_thinkpad_700() || (cs + cpu_state.pc < 0xe0000) || \
+                             (cs + cpu_state.pc >= 0x100000)))
+#define CPU_CODE_CACHE_ON() (isibm486 ? IBM_CODE_CACHE_ON() : !(cr0 & (1 << 30)))
 #ifdef USE_DEBUG_REGS_486
-#    define CACHE_ON() (!(cr0 & (1 << 30)) && !(cpu_state.flags & T_FLAG) && !(dr[7] & 0xFF))
+#    define CACHE_ON() (CPU_CODE_CACHE_ON() && !(cpu_state.flags & T_FLAG) && !(dr[7] & 0xFF))
 #else
-#    define CACHE_ON() (!(cr0 & (1 << 30)) && !(cpu_state.flags & T_FLAG))
+#    define CACHE_ON() (CPU_CODE_CACHE_ON() && !(cpu_state.flags & T_FLAG))
 #endif
 
 #ifdef USE_DYNAREC

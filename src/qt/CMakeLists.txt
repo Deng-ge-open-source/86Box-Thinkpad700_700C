@@ -368,7 +368,7 @@ else()
 endif()
 
 if(WIN32)
-    target_sources(plat PRIVATE ../unix/dummy_floppy_ioctl.c)
+    target_sources(plat PRIVATE win_floppy_ioctl.c)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD" OR CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     target_sources(plat PRIVATE ../unix/unix_floppy_ioctl.c)
 else()

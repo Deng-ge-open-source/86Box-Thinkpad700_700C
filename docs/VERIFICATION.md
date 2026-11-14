@@ -1,7 +1,12 @@
 # ThinkPad 700 / 700C verification
 
-Last local verification: **2026-11-13 (UTC)**. This records observed results,
+Last local verification: **2026-11-14 (UTC)**. This records observed results,
 not certification of every firmware function or host platform.
+
+For the 2026-11-14 publication, the Windows Qt target built successfully and
+the public-tree, DMA, Windows host-floppy cache and HDD-audio scheduling checks
+passed again. A separate 25 MHz pure-DOS session also reached the FS 5.1 cockpit.
+Earlier dated measurements below retain their original test dates.
 
 ## Test configuration
 
@@ -52,6 +57,114 @@ loop did repeatedly scan all RAM for an old 700 IML signature on the 700C;
 normal builds now exclude that scan. No firmware memory test was skipped, and
 this change is not claimed to shorten the original 32-second memory check.
 
+## Windows physical USB floppy — 2026-11-13
+
+The Windows Qt build was tested with a TEAC USB UF000x drive assigned to `A:`
+and the user's physical 700C Reference Diskette. Windows reported 80 cylinders,
+two heads, 18 sectors per track and 512-byte sectors. Read-only inspection found
+`PF1EC.ADF`, `SF1EC.ADF` and `$0009000.IML` on the disk.
+
+With `fdd_01_fn = ioctl://\\.\A:`, the original F1EC ROM completed POST and
+booted the physical Reference Diskette to its main menu. The log recorded reads
+from the Windows device across multiple cylinders, exceeding 800 KiB, rather
+than loading the bundled floppy image. The selection was retained in the saved
+configuration. [Captured main menu](images/thinkpad700c-usb-floppy-reference.png).
+
+A focused hardware probe checked boot/root directory reads, out-of-range CHS
+rejection, rejection of the fixed `C:` volume, forced guest write protection and
+unchanged boot-sector bytes after a rejected write. The backend opens the host
+device with `GENERIC_READ` only and contains no physical write operation.
+The monochrome 700 image-backed regression also reached its known Reference
+Diskette idle firmware trace with the expected F1EE identity.
+
+The private runtime uses the existing maximum sound gain of +18 dB, with the
+original drive-profile levels. WASAPI loopback measured hard-disk output peak
+0.1170 versus 0.01473 at 0 dB (about 7.94 times the amplitude). The host monitor
+and Windows master volume were not changed.
+
+Only a 1.44 MB physical Reference Diskette and this USB drive were tested.
+720 KiB/2.88 MB physical media, a separate physical DOS startup disk, media
+removal while reading, physical formatting and the complete diagnostic suite
+remain unverified. Physical writes/formatting are intentionally unsupported.
+
+## Host-floppy/cache follow-up — 2026-11-13
+
+The TEAC read-only probe was repeated after expanding the cache from one
+head/track to previously visited tracks. Five reads of the same cylinder took
+3,875 ms / ten physical reads / 92,160 bytes before, versus 750 ms / two reads /
+18,432 bytes after. This measures repeated-track access, not whole-boot speed.
+Controller seek-completion timing is retained: removing that delay caused a
+Reference boot regression during development and was not retained.
+
+The Windows storage-driver mock regression checks track revisits, cache
+invalidation after a reported media change or removal, unbuffered sector reads,
+CHS bounds, fixed-volume rejection and read-only access without opening hardware.
+The real A: boot/root/bounds/write-protection probe also passed again.
+
+With a configured but nonexistent host drive, the original 700C completed POST
+and the post-POST INT 19h handoff entered the hard-disk image's color Windows 3.2.
+The host path remained configured for the next cold boot. This exercises mount
+failure without removing the user's real disk; physical removal during a read
+was tested only in the mock, not on the TEAC.
+
+The game installed on the user's HDD identifies itself as Flight Simulator
+5.1, despite the initial report of 5.0. A separate working copy booted pure DOS
+and entered its color cockpit at IBM 486SLC/25; the emulator indicated 100%
+speed. This is not an in-game frame-rate measurement or a comparison against
+the same scene on a physical 700C. Game settings and the user's HDD were not
+modified for this test.
+
+Live CPU inspection found POR.CE enabled while prefetch timing remained six
+cycles and legacy recompilation was blocked by CR0.CD. CR0 mode switches could
+also clear the emulator's cache-enable state despite POR remaining enabled.
+After correction, the DOS game retained cache enable with zero prefetch penalty.
+The banked E000/F000 ThinkPad firmware stays interpreted so its per-instruction
+controller and wait-loop hooks are preserved. Cached DOS/Windows RAM code
+remains eligible for recompilation.
+Windows 3.2 color startup also passed. A separate Windows-standard-mode game
+autostart test reached the game splash but did not reliably enter the cockpit;
+it is not recorded as passing. The current CONFIG.SYS has no EMS manager and
+AUTOEXEC uses WIN /S. Microsoft's original
+[FS 5.1 notes](https://jeffpar.github.io/kbarchive/kb/132/Q132944/)
+require EMS for running inside Windows and recommend pure DOS for smoother play.
+
+Fresh-state testing reproduced a CP67 delay of about 64 seconds. The integrated
+700C ESDI controller powered up at arbitration 5 while POST configured DMA channel 0
+for arbitration E, leaving WRITE BUFFER waiting for a channel until timeout.
+The matching IBM @DF9F configuration file recommends E; the controller now
+powers up at E on the 700C, while the monochrome default remains 5 and later
+POS writes can still select other levels. In the corrected 700C run, CP67 to
+CP68 took 144 ms. The physical Reference Diskette reached its main menu
+without the 00174 warning seen with the mismatched default; the monochrome
+700 also reached its own main menu.
+
+The final Qt Release build, DMA regression, Windows host-floppy mock and
+public-tree checks passed. The monochrome 700 image-backed boot also reached
+the known Reference Diskette idle trace with its F1EE identity.
+
+## HDD audio during a host read — 2026-11-13
+
+The HDD mixer had its own thread but waited indefinitely for emulation-timer
+events. A synchronous USB read prevented those events from being produced;
+the 80 ms output queue could empty while a track read took hundreds of ms.
+In Windows host-floppy mode, the existing worker now uses a 20 ms host-clock
+deadline, coalesces early guest events and honors VM pause. Image-only mode
+keeps its original event-driven scheduling.
+
+A deterministic test runs the real worker with no guest events after 50 ms
+and a 400 ms pause during a two-second interval. The old worker produces zero
+blocks; the corrected worker produces 79, resumes after pause, and never sends
+blocks faster than the configured cadence. Image-only idle still waits for an
+event. The test uses no firmware, media or audio device.
+
+A second test cold-booted separate muted VMs from an offline snapshot with the
+real TEAC and Reference Diskette, leaving the user's running VM untouched. A
+read-only probe sampled the HDD worker's actual PCM buffer every 5 ms for
+45 seconds. The old worker had twelve intervals above 100 ms with no new PCM
+(longest 1,379 ms); the corrected worker had none (longest observed interval
+73 ms). This measures PCM production during real USB I/O, not a separate
+perceptual listening test or a guarantee against every host scheduling stall.
+
 ## Repeat the source-only checks
 
 From the repository root, with Python 3 and GCC available:
@@ -65,6 +178,18 @@ gcc -O2 -fwhole-program -Isrc/include -Isrc/cpu -ffunction-sections -fdata-secti
   -o build/thinkpad-tests/dma-arbitration
 ./build/thinkpad-tests/dma-arbitration
 ```
+
+On Windows with GCC, also run the hardware-free host-floppy regression:
+
+```powershell
+gcc -O2 -Isrc/include tools/thinkpad700/tests/test_win_host_floppy.c -o build/thinkpad-tests/win-host-floppy.exe
+./build/thinkpad-tests/win-host-floppy.exe
+gcc -O2 -fwhole-program -ffunction-sections -fdata-sections -Isrc/include -Isrc/cpu -Ibuild/windows-700c/src/include tools/thinkpad700/tests/test_hdd_audio_host_wait.c -Wl,--gc-sections -lm -o build/thinkpad-tests/hdd-audio-host-wait.exe
+./build/thinkpad-tests/hdd-audio-host-wait.exe
+```
+
+The HDD worker test uses the generated headers from the configured build tree;
+adjust `build/windows-700c` if your build directory differs.
 
 The DMA test checks arbitration E reassignment, enabled/masked channel selection
 and legacy fallback against the actual DMA implementation. These checks need no

@@ -1079,6 +1079,8 @@ opWRMSR(UNUSED(uint32_t fetchdat))
     if (cpu_has_feature(CPU_FEATURE_MSR)) {
         cpu_WRMSR();
         CLOCK_CYCLES(9);
+        if (isibm486)
+            CPU_BLOCK_END();
         return 0;
     }
     cpu_state.pc = cpu_state.oldpc;

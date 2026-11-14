@@ -50,11 +50,17 @@ the firmware paths that the project set out to preserve.
 This is an independent community project. It is not affiliated with or
 endorsed by IBM, Lenovo, or the upstream 86Box project.
 
-## Latest update — 2026-11-13
+## Latest update — 2026-11-14
 
-- Independent 700C firmware identity, matching Reference Diskette and 256-color Windows support.
-- Correct LCD proportions and keyboard brightness/contrast, without on-screen controls.
-- Firmware/storage fixes, dated boot verification, and a reproducible private handoff with a new README.
+- Windows USB floppy support: physical media are read-only, tried before the HDD image, and retried on the next cold start if absent.
+- Cache visited floppy tracks and mute sampled floppy sounds when using a real drive.
+- Correct 700C ESDI startup arbitration; the reproduced CP67 wait fell from about 64 seconds to 144 ms.
+- Fix IBM SLC cache timing and mode switches while retaining the 25 MHz configuration.
+- Keep HDD spindle audio playing during USB reads; retain color fullscreen and keyboard LCD controls.
+
+The physical 700C Reference Diskette and HDD boot paths were verified. A separate
+DOS session reached the Flight Simulator 5.1 cockpit; physical DOS boot disks and
+same-scene frame rates against real hardware remain unverified.
 
 Details and verification limits are in [the update notes](docs/RELEASE-NOTES.md).
 
@@ -227,6 +233,43 @@ For a fresh or converted 700C working disk, use the 700C Reference Diskette's
 the common 700/700C/720/720C Diagnostic Diskette when requested. Then run
 **Set configuration → Run automatic configuration**. Work on copies and keep
 the original images intact.
+
+#### Boot a physical USB floppy on Windows
+
+The Windows build can read a standard 720 KiB, 1.44 MB or 2.88 MB 3.5-inch disk
+through a host floppy drive. The drive must support the inserted disk's format.
+The guest always sees a **write-protected** disk; writing and formatting the
+physical medium are not implemented. Keep the model's matching Reference
+Diskette in the drive, or use a bootable DOS disk.
+
+For a host drive assigned `A:`, set these entries in the VM's existing
+`[Floppy and CD-ROM drives]` section:
+
+```ini
+fdd_01_type = 35_2hd
+fdd_01_fn = ioctl://\\.\A:
+fdd_01_host_device = \\.\A:
+fdd_host_buffering = 1
+```
+
+Cold boot first tries the physical disk through the emulated floppy controller.
+If no host disk can be mounted, the ThinkPad completes POST and boots the
+configured hard-disk image. The host-drive selection is retried on the next
+cold start. A mounted but non-bootable disk still follows the firmware's error
+path; an unreadable disk is not treated as a successful boot.
+Windows must already be running; the 700/700C ROM executes inside 86Box.
+Host-backed drives automatically suppress sampled floppy sounds. Hard-disk
+sounds and image-backed floppy sounds retain their configured levels. On Windows,
+the HDD sound worker follows host time while a physical floppy is selected,
+so synchronous USB reads do not interrupt the spindle sound. Pausing the VM
+still pauses sound production. The read cache retains visited tracks in memory
+and is invalidated when Windows reports a media change. After swapping disks,
+remount the drive using
+**Media → Floppy → Use Host Floppy Drive**, or restart the VM, to discard its
+cache explicitly. Windows device access may require an elevated process.
+This does not provide USB passthrough or low-level physical-drive diagnostics.
+The 700C Reference Diskette has been booted from a TEAC USB UF000x drive on
+Windows x64; see the [physical-media verification](docs/VERIFICATION.md#windows-physical-usb-floppy--2026-11-13).
 
 #### Install the 700C Windows color driver
 

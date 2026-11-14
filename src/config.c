@@ -1829,6 +1829,12 @@ load_floppy_and_cdrom_drives(void)
         sprintf(temp, "fdd_%02i_host_device", c + 1);
         p = ini_section_get_string(cat, temp, "");
         fdd_set_host_device(c, p);
+#ifdef _WIN32
+        /* A missing disk leaves the emulated drive empty for the ROM's HDD
+           fallback. Retain the host selection and probe it on the next boot. */
+        if (!floppyfns[c][0] && fdd_get_host_device(c)[0])
+            snprintf(floppyfns[c], sizeof(floppyfns[c]), "ioctl://%s", fdd_get_host_device(c));
+#endif
 
         for (int i = 0; i < MAX_PREV_IMAGES; i++) {
             fdd_image_history[c][i] = (char *) calloc((MAX_IMAGE_PATH_LEN + 1) << 1, sizeof(char));
@@ -3980,8 +3986,12 @@ save_floppy_and_cdrom_drives(void)
                                    fdd_get_internal_name(fdd_get_type(c)));
 
         sprintf(temp, "fdd_%02i_fn", c + 1);
-        /* Don't save ioctl:// paths */
-        if (strlen(floppyfns[c]) == 0 || strstr(floppyfns[c], "ioctl://") != NULL) {
+        /* Windows host floppy selections must survive the next cold boot. */
+        if (strlen(floppyfns[c]) == 0
+#ifndef _WIN32
+            || strstr(floppyfns[c], "ioctl://") != NULL
+#endif
+        ) {
             ini_section_delete_var(cat, temp);
 
             ui_writeprot[c] = 0;
