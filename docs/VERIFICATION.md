@@ -1,7 +1,12 @@
 # ThinkPad 700 / 700C verification
 
-Last local verification: **2026-11-13 (UTC)**. This records observed results,
+Last local verification: **2026-11-14 (UTC)**. This records observed results,
 not certification of every firmware function or host platform.
+
+For the 2026-11-14 publication, the Windows Qt target built successfully and
+the public-tree, DMA, Windows host-floppy cache and HDD-audio scheduling checks
+passed again. A separate 25 MHz pure-DOS session also reached the FS 5.1 cockpit.
+Earlier dated measurements below retain their original test dates.
 
 ## Test configuration
 

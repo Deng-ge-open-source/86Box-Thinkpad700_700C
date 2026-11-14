@@ -1,5 +1,26 @@
 # Update notes
 
+## 2026-11-14 — USB floppy and performance update
+
+This publication brings the read-only Windows USB-floppy backend, boot-order
+handling, track cache, 700C ESDI startup correction and SLC cache fixes together
+on main. HDD audio now continues during USB reads, and the private packager
+preserves installed sound assets and their license/provenance.
+
+The original README introduction and physical-machine photos are retained.
+Only public source, documentation and selected screenshots are published;
+private runtime ZIPs remain local. The verified game path is Flight Simulator
+5.1 in pure DOS, with the original 25 MHz configuration; this is not a measured
+frame-rate comparison against physical hardware. See [verification](VERIFICATION.md).
+
+此次发布整合 Windows USB 实体软盘只读访问、启动顺序、磁道缓存、700C ESDI 上电
+仲裁和 SLC 缓存修正；USB 读盘时硬盘声音保持续播，私人打包保留已安装的音效资源
+及其许可证和来源信息。
+
+保留 README 原有开头、实体机照片和整体结构。公开内容仅含源码、文档及精选截图，
+私人运行 ZIP 留在本地。游戏验证使用原 25 MHz 配置下的纯 DOS 模拟飞行 5.1，
+未据此宣称达到实体机同场景帧率，详见[验证记录](VERIFICATION.md)。
+
 ## 2026-11-13 — Keep HDD audio playing during USB reads
 
 On Windows, selecting a physical floppy now gives the HDD sound worker a

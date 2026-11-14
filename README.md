@@ -50,11 +50,17 @@ the firmware paths that the project set out to preserve.
 This is an independent community project. It is not affiliated with or
 endorsed by IBM, Lenovo, or the upstream 86Box project.
 
-## Latest update — 2026-11-13
+## Latest update — 2026-11-14
 
-- Independent 700C firmware identity, matching Reference Diskette and 256-color Windows support.
-- Correct LCD proportions and keyboard brightness/contrast, without on-screen controls.
-- Firmware/storage fixes, dated boot verification, and a reproducible private handoff with a new README.
+- Windows USB floppy support: physical media are read-only, tried before the HDD image, and retried on the next cold start if absent.
+- Cache visited floppy tracks and mute sampled floppy sounds when using a real drive.
+- Correct 700C ESDI startup arbitration; the reproduced CP67 wait fell from about 64 seconds to 144 ms.
+- Fix IBM SLC cache timing and mode switches while retaining the 25 MHz configuration.
+- Keep HDD spindle audio playing during USB reads; retain color fullscreen and keyboard LCD controls.
+
+The physical 700C Reference Diskette and HDD boot paths were verified. A separate
+DOS session reached the Flight Simulator 5.1 cockpit; physical DOS boot disks and
+same-scene frame rates against real hardware remain unverified.
 
 Details and verification limits are in [the update notes](docs/RELEASE-NOTES.md).
 
